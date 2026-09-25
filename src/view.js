@@ -663,7 +663,7 @@ export function createView(canvas, T) {
     dt = Math.min(Math.max(dt, 0), 0.1); F.t += dt; U.uTime.value = F.t;
     const roll = cam.roll || 0, D = cam.h / K, s = scale(cam.h);
     camera.position.set(cam.x, cam.y, D); camera.rotation.z = roll;
-    camera.near = Math.min(6, Math.max(0.5, D * 0.05)); camera.far = D + 30000; // (backdrop snow lives ≥ 7 m from the eye) camera.updateProjectionMatrix();
+    camera.near = Math.min(6, Math.max(0.5, D * 0.05)); camera.far = D + 30000; camera.updateProjectionMatrix(); // backdrop snow lives ≥ 7 m from the eye
     uH.value = cam.h; fill.material.uniforms.uPx.value = D * U.uPxK.value;
     const hw = cam.h * 0.5 * (camera.aspect * Math.abs(Math.cos(roll)) + Math.abs(Math.sin(roll)));
     stream(cam.x - hw - 8, cam.x + hw + 8);

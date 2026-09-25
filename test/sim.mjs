@@ -58,57 +58,49 @@ for (const gl of [1, 2, 3, 4, 5]) {
 }
 
 // --- bot pilot -----------------------------------------------------------------------------
-// skill: 'none' (no input), 'ok' (tucks, pops, lands aligned), 'good' (+ best-glide + boost use)
-export function fly(levels, skill = 'good', trace = false) {
+// Tucks, pops at the lip, then flies one simple strategy: hands-off (the landing assist lines it up), or
+// hold a fixed attitude; boosters burn at a fixed climb angle. 'best' tries them all and keeps the longest
+// clean-ish jump (memoized per loadout), which approximates a player who has learned the loadout.
+function flyOnce(levels, att, boostAtt, trace) {
   const st = loadoutStats(levels);
   const r = newRider(T, st);
   const inp = { up: false, down: false, boost: false, jump: false };
   const ev = [], log = [];
-  const g = st.glider;
-  const aoa = g ? bestAoA(g, st) : 0;
-  const glideAtt = g ? aoa - Math.atan(1 / bestLD(g, st, aoa)) : 0;
-  while (!r.done) {
+  while (!r.done && !(r.jump != null && r.t - r.landT > 2.5)) { // a run ends 2.5 s after the jump lands
     inp.up = inp.down = inp.boost = false;
-    if (skill !== 'none') {
-      if (r.ground) {
-        inp.down = !r.launched;
-        if (!r.launched && r.x > -1.2 && r.x < 0) inp.jump = true;
-      } else {
-        const alt = r.y - T.h(r.x);
-        const tImp = alt / Math.max(0.5, -r.vy);
-        const gam = Math.atan2(r.vy, r.vx);
-        let target;
-        const slopeAhead = Math.atan(T.slope(r.x + r.vx * Math.min(tImp, 1.5)));
-        if (skill === 'good' && r.launched && r.fuel > 0 && st.thrust) { target = 0.5; inp.boost = true; }
-        else if (tImp < (g ? 1.2 : 99) || !r.launched) target = slopeAhead;
-        else target = glideAtt; // hold a fixed attitude, like a person would
-        const err = wrap(target - r.a);
-        inp.up = err > 0.02; inp.down = err < -0.02;
-      }
+    if (r.ground) {
+      inp.down = !r.launched;
+      if (!r.launched && r.x > -1.2 && r.x < 0) inp.jump = true;
+    } else if (r.launched) {
+      let target = att;
+      if (r.fuel > 0 && st.thrust) { target = boostAtt; inp.boost = true; }
+      const alt = r.y - T.h(r.x), tImp = alt / Math.max(0.5, -r.vy);
+      if (target != null && tImp > 0.6) { const err = wrap(target - r.a); inp.up = err > 0.02; inp.down = err < -0.02; }
     }
     step(r, inp, st, T, ev);
     if (trace && Math.round(r.t / DT) % 6 === 0) log.push([r.t.toFixed(2), r.x.toFixed(1), r.y.toFixed(1), Math.hypot(r.vx, r.vy).toFixed(1), r.ground ? 'G' : 'A'].join('\t'));
   }
-  const land = ev.find(e => e.type === 'land' || e.type === 'crash');
-  return { dist: Math.max(0, r.maxX), landX: land?.x ?? 0, airtime: r.airtime, maxAlt: r.maxAlt, maxSpeed: r.maxSpeed,
+  return { dist: r.jump ?? 0, landX: r.jump ?? 0, airtime: r.airtime, maxAlt: r.maxAlt, maxSpeed: r.maxSpeed,
     flips: r.flips, landing: r.landing, lanterns: 0, rings: 0, t: r.t, lip: ev.find(e => e.type === 'launch')?.speed ?? 0, log, st };
 }
-
-const bestLD = (g, st, a) => (g.area * g.cla * a) / (g.area * (g.cd0 + g.k * (g.cla * a) ** 2) + st.cda * g.body * (1 + 1.2 * Math.sin(a) ** 2));
-
-// best-glide angle of attack (max L/D incl. prone body drag), found numerically
-function bestAoA(g, st) {
-  let best = 0, bestLD = 0;
-  for (let a = 0.01; a < g.stall; a += 0.005) {
-    const cl = g.cla * a, cd = g.area * (g.cd0 + g.k * cl * cl) + st.cda * g.body * (1 + 1.2 * Math.sin(a) ** 2);
-    const ld = (g.area * cl) / cd;
-    if (ld > bestLD) { bestLD = ld; best = a; }
+const memo = new Map();
+export function fly(levels, skill = 'best', trace = false) {
+  if (skill === 'none') return flyOnce(levels, null, 0.35, trace);
+  const key = JSON.stringify(loadoutStats(levels));
+  if (!trace && memo.has(key)) return memo.get(key);
+  let best = null;
+  for (const att of [null, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3]) for (const ba of [0.2, 0.35, 0.5]) {
+    const r = flyOnce(levels, att, ba, trace);
+    const score = r.dist * (r.landing === 'crash' ? 0.7 : 1);
+    if (!best || score > best.score) best = { ...r, score };
+    if (!loadoutStats(levels).thrust) break;
   }
+  memo.set(key, best);
   return best;
 }
 
 const lv = o => ({ ...newSave().levels, ...o });
-const fmt = r => `${r.dist.toFixed(0).padStart(6)} m  land ${r.landX.toFixed(0).padStart(5)}  lip ${(r.lip * 3.6).toFixed(0).padStart(3)} km/h  air ${r.airtime.toFixed(1).padStart(5)} s  alt ${r.maxAlt.toFixed(0).padStart(4)}  vmax ${(r.maxSpeed * 3.6).toFixed(0).padStart(4)}  ${r.landing}  t=${r.t.toFixed(0)}s`;
+const fmt = r => `${r.dist.toFixed(0).padStart(6)} m  lip ${(r.lip * 3.6).toFixed(0).padStart(3)} km/h  air ${r.airtime.toFixed(1).padStart(5)} s  alt ${r.maxAlt.toFixed(0).padStart(4)}  vmax ${(r.maxSpeed * 3.6).toFixed(0).padStart(4)}  ${r.landing}  t=${r.t.toFixed(0)}s`;
 
 const rows = [
   ['start, no input', lv({}), 'none'],

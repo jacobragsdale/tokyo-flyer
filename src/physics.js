@@ -18,13 +18,13 @@ const S2 = t => (t <= 0 || t >= 1 ? 0 : 60 * t * (t - 1) * (2 * t - 1));
 
 // ---------------------------------------------------------------- terrain
 
-export function makeTerrain() {
+export function makeTerrain({ knoll = 55, knollLen = 160 } = {}) {
   const KICK = 11 * RAD;    // kicker lip angle (up)
   const INRUN = -38 * RAD;  // in-run slope
   const R = 45;             // transition radius, m
   const TABLE = 3;          // straight kicker table length, m
   const DROP = 3;           // lip height above the knoll, m
-  const KNOLL = 18, KNOLL_L = 50; // landing slope: drops KNOLL m over KNOLL_L m
+  const KNOLL = knoll, KNOLL_L = knollLen; // landing hill: drops KNOLL m over KNOLL_L m
   const HILLS = [[3, 90, 0.7], [6, 260, 2.1], [12, 700, 4.2]]; // outrun: amplitude m, wavelength m, phase
 
   const tk = Math.tan(KICK), ti = Math.tan(INRUN);
@@ -71,8 +71,9 @@ export function newRider(T, st) {
     x, y: T.h(x), vx: 0, vy: 0, a: Math.atan(T.slope(x)), w: 0,
     s: 1.5,            // speed along the surface while grounded (push-off)
     ground: true, fuel: st.fuel, tuck: false, boosting: false, glide: false, crashed: false, done: false,
-    t: 0, launched: false, lipT: -1, popped: false, rot: 0, still: 0, stall: 0, gd: 0, airT: 0, latch: 0,
+    t: 0, launched: false, lipT: -1, popped: false, rot: 0, still: 0, stuck: 0, gd: 0, airT: 0, latch: 0, stalled: false,
     maxX: 0, maxAlt: 0, maxSpeed: 0, airtime: 0, flips: 0, landing: null,
+    jump: null, landT: 0, // the score: where the first touchdown past the lip happened (ski-jump style)
   };
 }
 
@@ -85,7 +86,7 @@ function liftCoef(al, g) {
   return (Math.sign(al) * peak * (1 - 0.5 * t) * Math.cos(x)) / Math.cos(g.stall);
 }
 
-const POP = 4.2, POP_PERFECT = 1.8, PERFECT_T = 0.12, COYOTE = 0.1; // pop speeds m/s, timing windows s
+const POP = 4.2, POP_PERFECT = 1.8, PERFECT_T = 0.12, COYOTE = 0.18; // pop speeds m/s, timing windows s
 const MAX_LIFT = 6 * G;
 // landing: body-vs-slope window (deg) grows with sled + charm; impact speed into the snow (m/s) decides hard/wipeout
 const WINDOW = 14, BUTTER_VN = 5, SOLID_VN = 12.5, WIPEOUT_VN = 19;
@@ -125,8 +126,8 @@ export function step(r, inp, st, T, ev) {
   }
   // run ends once we've been (nearly) stationary on the snow for a moment, or stopped gaining ground
   r.still = r.ground && Math.abs(r.s) < 0.3 ? r.still + dt : 0;
-  r.stall = r.ground && r.launched && r.x < r.maxX - 0.01 ? r.stall + dt : 0;
-  if (r.still > (r.x < 0 ? 1.5 : 0.5) || r.stall > 2 || r.t > 300) { r.done = true; ev.push({ type: 'stop', x: r.x, y: r.y }); }
+  r.stuck = r.ground && r.launched && r.x < r.maxX - 0.01 ? r.stuck + dt : 0;
+  if (r.still > (r.x < 0 ? 1.5 : 0.5) || r.stuck > 2 || r.t > 300) { r.done = true; ev.push({ type: 'stop', x: r.x, y: r.y }); }
 }
 
 function pop(r, T, ev, coyote = false) {
@@ -186,7 +187,7 @@ function stepGround(r, inp, st, T, ev, dt) {
   r.w = r.s * kappa;
   const c2 = 1 / Math.sqrt(1 + e2.d1 * e2.d1);
   r.vx = r.s * c2; r.vy = r.s * e2.d1 * c2;
-  r.glide = false;
+  r.glide = r.stalled = false;
 }
 
 function stepAir(r, inp, st, T, ev, dt) {
@@ -197,6 +198,7 @@ function stepAir(r, inp, st, T, ev, dt) {
   const sp = Math.hypot(r.vx, r.vy);
   const gam = Math.atan2(r.vy, r.vx);
   const al = sp > 0.5 ? wrap(r.a - gam) : 0; // angle of attack
+  r.stalled = !!g && Math.abs(al) > g.stall;
 
   // Pitch is a rate servo: hold ↑/↓ to rotate, release to hold the attitude — the flight path then
   // settles onto where the nose points. Flips spin fast; a glider turns slower and can't be pulled past
@@ -204,17 +206,20 @@ function stepAir(r, inp, st, T, ev, dt) {
   // if fast enough). If the wing stalls anyway (too slow for the attitude held) the nose drops.
   if (!r.crashed) {
     const dir = (inp.up && !(r.latch & 1) ? 1 : 0) - (inp.down && !(r.latch & 2) ? 1 : 0);
-    let tw = dir * (g ? 2.1 : 4.7), k = dir ? (g ? 8.3 : 16.7) : 12.5; // 120/270 °/s, τ 120/60 ms, release τ 80 ms
+    // 120/270 °/s; spool-up τ 120/60 ms; on release a flip stops within ~25 ms so taps are precise
+    let tw = dir * (g ? 2.1 : 4.7), k = dir ? (g ? 8.3 : 16.7) : g ? 12.5 : 40;
     if (g) {
-      const lim = g.stall * 0.9;
-      if (dir > 0 && al > lim) tw = Math.min(tw, r.gd + 10 * (lim - al));
-      else if (dir < 0 && al < -lim) tw = Math.max(tw, r.gd + 10 * (-lim - al));
-      else if (!dir && Math.abs(al) > g.stall) tw = r.gd - 3 * (al - Math.sign(al) * lim);
+      const hi = g.stall + 0.09, lo = -0.05; // ↑ may nose a little past stall (you feel it mush); ↓ stops at ~zero lift
+      if (dir > 0 && al > hi) tw = Math.min(tw, r.gd + 10 * (hi - al));
+      else if (dir < 0 && al < lo) tw = Math.max(tw, r.gd + 10 * (lo - al));
+      else if (!dir && Math.abs(al) > g.stall) tw = r.gd - 3 * (al - Math.sign(al) * g.stall * 0.9);
+      else if (!dir && gam < -0.6) tw = Math.max(tw, Math.min(0.8, (-0.6 - gam) * 2)); // ease out of steep dives
     }
-    // landing assist: hands off, close above the snow and roughly lined up → ease onto the slope angle
-    if (!dir && r.launched && r.vy < 0) {
+    // landing assist: hands off, under ~0.45 s from the snow and roughly lined up → ease onto the slope angle
+    if (!dir && r.launched) {
       const e = T.at(r.x), off = wrap(Math.atan(e.d1) - r.a);
-      if (r.y - e.h < 3 && Math.abs(off) < 0.8) tw += Math.sign(off) * Math.min(2, Math.abs(off) * 12);
+      const closing = e.d1 * r.vx - r.vy; // how fast the gap to the snow shrinks
+      if (closing > 0 && (r.y - e.h) / closing < 0.45 && Math.abs(off) < 0.8) tw = Math.sign(off) * Math.min(2.5, Math.abs(off) * 10);
     }
     r.w += (tw - r.w) * (1 - Math.exp(-dt * k));
   }
@@ -273,6 +278,7 @@ function touchDown(r, st, T, ev, xEnd) {
     const e2 = T.at(xEnd), c2 = 1 / Math.sqrt(1 + e2.d1 * e2.d1);
     r.ground = true; r.glide = false; r.x = xEnd; r.y = e2.h; r.a = Math.atan(e2.d1); r.w = 0;
     r.s = vt; r.vx = vt * c2; r.vy = vt * e2.d1 * c2;
+    if (r.launched && r.jump == null && r.x > 0) { r.jump = r.x; r.landT = r.t; r.landing = 'good'; }
     return;
   }
   // Tiers: butter (lined up + soft: full speed + a kick), clean, sketchy (off-angle: lose up to 30 %),
@@ -290,7 +296,7 @@ function touchDown(r, st, T, ev, xEnd) {
   const kick = (q === 'perfect' ? 2 : 0) + flips * 2.5; // Tiny Wings / Alto-style reward
   r.s = vt * keep + Math.sign(vt || 1) * kick;
   if (q === 'crash') r.crashed = true;
-  if (r.launched && !r.landing) { r.landing = q; r.flips = flips; }
+  if (r.launched && r.jump == null && r.x > 0) { r.jump = r.x; r.landT = r.t; r.landing = q; r.flips = flips; }
   else if (r.launched && flips) r.flips += flips;
   r.rot = 0;
   r.vx = r.s * c; r.vy = r.s * sn;

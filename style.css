@@ -240,6 +240,10 @@ kbd {
 }
 .track b { position: absolute; top: -3px; width: 2px; height: 9px; margin-left: -1px; background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
 .center { top: calc(var(--pt) + 2px); left: 50%; transform: translateX(-50%); text-align: center; white-space: nowrap; }
+.center::before { /* soft dark backing: dragons and the BEST beam pass behind the readout */
+  content: ''; position: absolute; inset: -6px -40px -10px; z-index: -1; pointer-events: none;
+  background: radial-gradient(closest-side, rgb(22 22 30 / .55), transparent);
+}
 .dist {
   font: 800 clamp(38px, 6.6vw, 84px)/1 var(--ui); font-variant-numeric: tabular-nums; color: #eafaff;
   text-shadow: 0 0 10px var(--blue1), 0 0 28px rgb(42 195 222 / .5), 0 2px 3px rgb(0 0 0 / .6);

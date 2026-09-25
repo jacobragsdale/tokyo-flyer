@@ -21,10 +21,11 @@ const cam = { x: r.x + 8, y: r.y, h: 16, roll: 0 };
 const eye = { x: cam.x, y: cam.y, h: cam.h, lead: 0, trauma: 0, punch: 0 }; // smoothed camera before shake
 const TIME_SCALE = 1.2; // research: same trajectories, ~20% snappier
 let freeze = 0, slowT = 0, slowK = 1;
-let jumpShown = false, acc = 0, items = [], next = 0, got = { lanterns: 0, rings: 0, yen: 0 }, milestone = 0, recordShown = false, endTimer = -1;
+let jumpShown = false, wasStalled = false, stallT = -9, acc = 0, items = [], next = 0, got = { lanterns: 0, rings: 0, yen: 0 }, milestone = 0, recordShown = false, endTimer = -1;
 const events = [];
 
 const shopData = () => ({ save, tracks: TRACKS, goal: GOAL });
+const runDist = () => r.jump ?? Math.max(0, r.maxX); // ski-jump scoring: where you first touch down past the lip
 
 initUI({
   onLaunch: startRun,
@@ -97,8 +98,8 @@ function startRun() {
 
 function finish() {
   if (mode !== 'run') return;
-  r.done = true;
-  const dist = Math.max(0, r.maxX);
+  inp.up = inp.down = inp.boost = false;
+  const dist = runDist();
   const run = { dist, airtime: r.airtime, maxAlt: r.maxAlt, flips: r.flips, landing: r.landing, lanterns: got.lanterns, rings: got.rings };
   const pay = payout(run, st.mult, save.best);
   const newRecord = dist > save.best + 0.05;
@@ -183,7 +184,7 @@ function handle(e) {
       audio.play(hard || e.quality === 'sketchy' ? 'hardland' : 'land', Math.max(0.2, Math.min(1.5, e.vn / 10)));
       if (e.quality === 'perfect' && e.airT > 0.5) audio.play('perfect');
       eye.trauma += hard ? 0.5 : 0.2;
-      eye.punch = 0.04;
+      eye.punch = Math.min(0.04, 0.004 * e.vn);
       view.fx('land', e);
       if (!r.launched || e.x < 1 || e.airT < 0.25) break;
       if (e.quality === 'perfect') hitStop(0.04);
@@ -200,7 +201,6 @@ function handle(e) {
       if (!jumpShown && r.launched) { jumpShown = true; toast(`JUMP ${e.x.toFixed(1)} m`, 'info'); }
       view.fx('crash', e);
       break;
-    case 'stop': endTimer = 0.9; break;
   }
 }
 
@@ -254,7 +254,7 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
 
-  if (mode === 'run') {
+  if (mode === 'run' || mode === 'results') { // after the results come up the rider keeps skidding behind them
     let scale = TIME_SCALE;
     if (freeze > 0) { freeze -= dt; scale = 0; }
     else if (slowT > 0) { slowT -= dt; scale *= slowK; }
@@ -262,15 +262,19 @@ function frame(now) {
     while (acc >= DT && !r.done) {
       prev.x = r.x; prev.y = r.y; prev.a = r.a;
       step(r, inp, st, T, events);
-      pickups();
-      for (const e of events) handle(e);
+      if (mode === 'run') { pickups(); for (const e of events) handle(e); }
       events.length = 0;
       acc -= DT;
     }
-    if (r.done && endTimer < 0) endTimer = 0.9;
+  }
+  if (mode === 'run') {
+    // the jump is scored at touchdown; give the landing a moment to breathe, then show the results
+    if (endTimer < 0 && (r.done || (r.jump != null && r.t - r.landT > 2.2))) endTimer = r.done ? 0.9 : 0.2;
     if (endTimer >= 0 && (endTimer -= dt) < 0) finish();
+    if (r.stalled && !wasStalled && r.t - stallT > 2) { toast('STALL', 'bad'); stallT = r.t; }
+    wasStalled = r.stalled;
 
-    const dist = Math.max(0, r.maxX);
+    const dist = runDist();
     while (milestone < MARKS.length && dist >= MARKS[milestone]) {
       const m = MARKS[milestone++];
       toast(m === GOAL ? 'TOKYO TOWER!' : `${m} m`, m === GOAL ? 'great' : 'info');
@@ -284,7 +288,7 @@ function frame(now) {
   }
 
   // interpolate between the last two physics states for smooth rendering at any refresh rate
-  const k = mode === 'run' ? Math.min(1, acc / DT) : 1;
+  const k = mode === 'run' || mode === 'results' ? Math.min(1, acc / DT) : 1;
   let da = r.a - prev.a;
   da -= Math.PI * 2 * Math.round(da / (Math.PI * 2));
   Object.assign(view_r, {

@@ -2,7 +2,8 @@
 
 A neon night-time sled-launch game in Three.js. Slide down a snowy in-run, pop off the kicker, and fly as
 far as you can over Tokyo while dragons drift across the sky. Every run earns yen; spend it on better
-sleds, higher start gates, boosters, gliders and charms, then go again. Reach Tokyo Tower at 3,333 m to win.
+sleds, higher start gates, boosters, gliders and charms, then go again. Distance is scored like ski
+jumping — where you first touch down past the lip — and a jump that reaches Tokyo Tower at 3,333 m wins.
 
 ![Tokyo Flyer](docs/screenshot.jpg)
 
@@ -16,7 +17,7 @@ sleds, higher start gates, boosters, gliders and charms, then go again. Reach To
 | End run | Esc | END |
 
 Tips: tuck all the way down the in-run and tap ↑ in the last instant before the lip for a perfect pop.
-Land with the sled parallel to the snow. With a glider, keep the nose a little above your direction of
+Land with the sled parallel to the snow (let go of the keys near the ground and the rider eases into it). With a glider, keep the nose a little above your direction of
 travel — too high and it stalls, dive to pick up speed, pull up to trade it for height.
 
 ## Run it

@@ -29,7 +29,7 @@ export const TRACKS = [
   ] },
   { id: 'glider', name: 'Glider', kanji: '翼', tiers: [
     { name: 'None', perk: 'Falls like a rock', desc: 'Arms flapping does not count.', price: 0, area: 0 },
-    { name: 'Wagasa Umbrella', perk: 'Floaty, draggy', desc: 'Oiled paper. Surprisingly brave.', price: 200, area: 8, cla: 3, stall: 0.5, cd0: 0.05, k: 0.2, body: 0.8 },
+    { name: 'Wagasa Umbrella', perk: 'Floaty, draggy', desc: 'Oiled paper. Surprisingly brave.', price: 200, area: 8, cla: 3, stall: 0.5, cd0: 0.1, k: 0.25, body: 0.8 },
     { name: 'Tako Kite', perk: 'Real lift', desc: 'A festival kite with a harness.', price: 800, area: 6.5, cla: 3.6, stall: 0.45, cd0: 0.04, k: 0.14, body: 0.6 },
     { name: 'Neon Hang Glider', perk: 'Long, stable glides', desc: 'Aluminium ribs, LED edges.', price: 2500, area: 3.5, cla: 4, stall: 0.4, cd0: 0.035, k: 0.08, body: 0.35 },
     { name: 'Night Wingsuit', perk: 'Fast and slippery', desc: 'Dive to fly. Pull up to soar.', price: 7000, area: 0.95, cla: 4.2, stall: 0.38, cd0: 0.03, k: 0.07, body: 0.14 },
@@ -111,7 +111,7 @@ export const MILESTONES = [[100, 100], [250, 200], [500, 400], [1000, 800], [200
 // Yen for a finished run. run = {dist, airtime, maxAlt, flips, landing, lanterns, rings}; prevBest = best before it
 export function payout(run, mult, prevBest = Infinity) {
   const lines = [
-    ['Distance', run.dist * 1],
+    ['Distance', run.dist + Math.min(run.dist, 100)], // the first 100 m pay double: early runs are short
     ['Airtime', run.airtime * 4],
     ['Height', run.maxAlt * 1.5],
     ['Flips', run.flips * 25],
