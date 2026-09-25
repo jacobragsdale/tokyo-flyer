@@ -1,9 +1,11 @@
-// Tokyo Night backdrop: everything behind the gameplay plane (z ≤ −90) plus camera-relative falling snow.
+// Tokyo Night backdrop: everything behind the gameplay plane (z ≤ −45) plus camera-relative weather.
 // Sky + moon + stars (screen quad, drawn last), Fuji & ranges (ridge strip built in the vertex shader), cloud belts,
 // four parallax skyline layers painted once into canvas textures (neon pixels get an HDR boost → bloom),
-// serpentine neon dragons (one mesh), hanabi and snow with speed streaks. 10 draw calls, no allocations per frame.
-// createBackdrop(scene, camera) -> { update(dt) }: call after the camera is placed each frame; keeps its own clock from dt
-// (a second `t` argument is accepted and ignored, so a per-run timer can't stall the schedules). Deterministic: seeded.
+// serpentine neon dragons (one mesh), hanabi, lightning, and sakura petals / rain with speed streaks.
+// No allocations per frame. createBackdrop(scene, camera, hooks) -> { update(dt), setLook, escort, strike }: call update
+// after the camera is placed each frame; keeps its own clock from dt (a second `t` argument is accepted and ignored,
+// so a per-run timer can't stall the schedules). hooks.bolt(delay, k) fires on every lightning strike. Seeded.
+// The Dragon class and its mesh are exported: the player's own dragon form is built with them.
 import * as THREE from 'three';
 
 const TN = {
@@ -11,7 +13,7 @@ const TN = {
   green1: '#73daca', magenta: '#bb9af7', magenta2: '#ff007c', purple: '#9d7cd8', orange: '#ff9e64', yellow: '#e0af68',
   red: '#f7768e', fg: '#c0caf5',
 };
-const BASE = -80; // street level of the city in the valley below the snowy hills (m)
+const BASE = -80; // street level of the city in the valley below the hills (m)
 const JP = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo","Noto Sans CJK JP","Noto Sans JP",sans-serif';
 
 const lin = hex => new THREE.Color(hex);
@@ -32,7 +34,7 @@ const NEON = [TN.cyan, TN.blue1, TN.blue5, TN.blue, TN.magenta, TN.magenta2, TN.
   TN.cyan, TN.orange, TN.yellow, TN.red].map(vivid);
 const WARM = ['#b08850', '#a67c48', '#b8914f', '#9c6a40', '#b89868'];
 const COOL = ['#6d88b8', '#6a92b8', '#8a9cc0', '#5f9aa8', '#8088c0'];
-const WORDS_V = ['居酒屋', 'ラーメン', 'カラオケ', 'ネオン', '東京', '龍', '夜', '寿司', '酒場', 'ホテル', '喫茶', '焼鳥', '雪見', '夢'];
+const WORDS_V = ['居酒屋', 'ラーメン', 'カラオケ', 'ネオン', '東京', '龍', '夜', '寿司', '酒場', 'ホテル', '喫茶', '焼鳥', '花見', '夢'];
 const WORDS_H = ['東京', 'ラーメン', 'カラオケ', 'ネオン', '居酒屋', '龍', '夜', 'TOKYO', 'BAR', 'HOTEL', '渋谷', '新宿', '24H', '夜景'];
 const WORDS_ROOF = ['東京', 'TOKYO', 'BAR', 'HOTEL', 'ネオン', 'カラオケ', 'ラーメン', '24H', '夜']; // few strokes: stays legible when small
 
@@ -200,7 +202,7 @@ function paintSkyline(o) {
     rect(x + w - Math.max(.6, 1 / rho), 0, Math.max(.6, 1 / rho), h, o.rim); // moonlit edge
     if (r() < (o.edge || 0)) rect(r() < .5 ? x + .4 : x + w - .4 - Math.max(.35, 1 / rho), h * (.1 + .4 * r()), Math.max(.35, 1 / rho), h * (.3 + .3 * r()), pick(NEON)); // LED edge strip
     windows(x, w, h);
-    rect(x, h, w, Math.max(.45, 1 / rho), o.snow); // snow on the roof
+    rect(x, h, w, Math.max(.45, 1 / rho), o.snow); // moonlit roof edge (wet with the rain, these days)
     if (o.shop && r() < .55) rect(x + 1 + r() * w * .2, 0, w * (.3 + r() * .4), 3.2, pick(r() < .6 ? WARM : COOL)); // lit shopfront
     if (o.crown && r() < o.crown) { // neon crown on a far tower
       const c = pick(NEON);
@@ -314,15 +316,18 @@ const PROF = S.map(s => Math.max(s < .09 ? .35 + .8 * Math.exp(-(((s - .035) / .
 const DRAGONS = [ // far → near (also the draw order inside the mesh)
   { c1: TN.yellow, c2: TN.orange, glow: .95, z: [-2350, -1900], L: 900, y: [.34, .5] },
   { c1: TN.purple, c2: TN.blue, glow: 1.2, z: [-1050, -850], L: 380, y: [.3, .52] },
+  { c1: TN.magenta2, c2: TN.magenta, glow: 1.25, z: [-760, -620], L: 280, y: [.36, .54] }, // LEGACY: a flyer from an earlier playthrough
   { c1: TN.blue1, c2: TN.green1, glow: 1.5, z: [-420, -330], L: 160, y: [.28, .5] },
-  { c1: TN.magenta2, c2: TN.magenta, glow: 1.45, z: [-140, -100], L: 60, y: [.42, .56] },
+  { c1: TN.magenta2, c2: TN.magenta, glow: 1.45, z: [-140, -100], L: 60, y: [.42, .56], near: -48 }, // YOU: the rider's colours
 ];
+const LEGACY = 2, YOU = 4;
+export const PLAYER_DRAGON = { c1: TN.magenta2, c2: TN.magenta, glow: .9 }; // dimmer than the sky dragons: it's close, so its rims are thick
 const CX = new Float32Array(DN), CY = new Float32Array(DN), PX = new Float32Array(DN), PY = new Float32Array(DN);
 const FX = new Float32Array(DN), FY = new Float32Array(DN), NX = new Float32Array(DN), NY = new Float32Array(DN);
 const SX = new Float32Array(12), SY = new Float32Array(12);
 
-function dragonMesh(n) {
-  const ap = [], idx = [];
+export function dragonMesh(specs) {
+  const n = specs.length, ap = [], idx = [];
   let v = 0;
   const vert = (u, w, part, d) => { ap.push(u, w, part, d); return v++; };
   const strip = (m, part, d, us) => {
@@ -343,9 +348,9 @@ function dragonMesh(n) {
   g.setIndex(idx);
   return new THREE.Mesh(g, new THREE.ShaderMaterial({
     ...PREMUL, side: THREE.DoubleSide,
-    uniforms: { uT: { value: 0 }, uC1: { value: DRAGONS.map(d => neon(d.c1)) }, uC2: { value: DRAGONS.map(d => neon(d.c2)) }, uGlow: { value: DRAGONS.map(d => d.glow) } },
+    uniforms: { uT: { value: 0 }, uAlpha: { value: 1 }, uC1: { value: specs.map(d => neon(d.c1)) }, uC2: { value: specs.map(d => neon(d.c2)) }, uGlow: { value: specs.map(d => d.glow) } },
     vertexShader: 'attribute vec4 aP; varying vec4 vP; void main() { vP = aP; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
-    fragmentShader: `uniform float uT; uniform vec3 uC1[4], uC2[4]; uniform float uGlow[4]; varying vec4 vP;
+    fragmentShader: `uniform float uT, uAlpha; uniform vec3 uC1[${n}], uC2[${n}]; uniform float uGlow[${n}]; varying vec4 vP;
       void main() {
         int i = int(vP.w + .5); vec3 c1 = uC1[i], c2 = uC2[i]; float g = uGlow[i], u = vP.x, v = vP.y, av = abs(v), a;
         vec3 add;
@@ -360,23 +365,26 @@ function dragonMesh(n) {
         } else if (vP.z < 1.5) { add = c2 * g * (.12 + 1.1 * v * v); a = .08; }                    // dorsal fin
         else if (vP.z < 2.5) { add = mix(c2, c1, u) * g * 1.3 * (1. - .7 * u) * (1. - smoothstep(.4, 1., av)); a = 0.; } // whiskers, horns, mane, tuft
         else { add = c1 * g * (.22 + .9 * smoothstep(.7, 1., u) + .5 * smoothstep(.5, 1., av)); a = .5 * (1. - smoothstep(.7, 1., av)); } // legs, jaw
-        gl_FragColor = vec4(add + c1 * .012 * a, a);
+        gl_FragColor = vec4(add + c1 * .012 * a, a) * uAlpha;
       }`,
   }));
 }
 
-class Dragon {
-  constructor(spec, index, pos, r) { Object.assign(this, { spec, pos, r, base: index * VPD, on: false, rx: new Float32Array(RING), ry: new Float32Array(RING), w: 0 }); }
+export class Dragon {
+  constructor(spec, index, pos, r) { Object.assign(this, { spec, pos, r, base: index * VPD, on: false, rx: new Float32Array(RING), ry: new Float32Array(RING), w: 0, ax: 0, ay: 0, z: 0, dir: 1, ph: 0, age: 0 }); }
 
-  spawn(env, mid) {
-    const r = this.r, s = this.spec;
+  // o.near 0..1: come in closer (spec.near is the closest depth); o.pace 0..1: linger alongside the camera, lower down
+  spawn(env, mid, o = {}) {
+    const r = this.r, s = this.spec, near = o.near || 0, pace = o.pace || 0;
     this.on = true;
-    this.z = s.z[0] + (s.z[1] - s.z[0]) * r();
-    this.L = s.L * (.85 + .3 * r()) * Math.min(1, Math.max(.55, env.asp / 1.6));
-    this.step = this.L / SEG; this.T = 11 + 5 * r();
-    this.dir = env.speed < 4 && r() < .4 ? -1 : 1; // right-to-left only while the camera idles; those stay world-anchored
+    const z = s.z[0] + (s.z[1] - s.z[0]) * r();
+    this.z = s.near ? z + (s.near - z) * near : z;
+    this.L = s.L * (.85 + .3 * r()) * Math.min(1, Math.max(.55, env.asp / 1.6)) * (1 - .3 * near);
+    this.step = this.L / SEG; this.T = (11 + 5 * r()) * (1 + 1.6 * pace);
+    this.dir = env.speed < 4 && r() < .4 && !pace ? -1 : 1; // right-to-left only while the camera idles; those stay world-anchored
     this.ax = env.fx; this.ay = env.fy;
-    this.y0 = s.y[0] + (s.y[1] - s.y[0]) * r(); this.w1 = .45 + .35 * r(); this.w2 = 1.1 + .5 * r(); this.p1 = 6.28 * r(); this.p2 = 6.28 * r();
+    const y0 = s.y[0] + (s.y[1] - s.y[0]) * r();
+    this.y0 = y0 + (.14 - y0) * .75 * pace; this.w1 = .45 + .35 * r(); this.w2 = 1.1 + .5 * r(); this.p1 = 6.28 * r(); this.p2 = 6.28 * r();
     this.loop = r() < .5 ? this.T * (.35 + .25 * r()) : -99; this.ph = 6.28 * r();
     const H = (env.D - this.z) * env.th, W = H * env.asp, a0 = mid ? this.T * (.28 + .12 * r()) : 0;
     const pre = Math.min(8, .75 * this.L * this.T / (W * 1.08 + this.L * 1.15));
@@ -386,6 +394,8 @@ class Dragon {
     for (; this.age < a0; this.age += 1 / 30) { this.path(W, H); this.advance(); } // pre-warm: lay the trail
     this.age = a0;
   }
+
+  off() { this.on = false; this.pos.fill(0, this.base * 3, (this.base + VPD) * 3); }
 
   path(W, H) { // head position relative to the anchor: crosses the view with sine weaves and maybe a loop-the-loop
     const a = this.age, span = W * 1.08 + this.L * 1.15;
@@ -403,6 +413,13 @@ class Dragon {
       this.w = (this.w + 1) % RING; this.rx[this.w] = this.lx; this.ry[this.w] = this.ly;
       dx = this.hx - this.lx; dy = this.hy - this.ly; d = Math.sqrt(dx * dx + dy * dy);
     }
+  }
+
+  // lay the whole trail at once, head at (hx, hy): behind(d, out) writes the point d metres back along the path
+  settle(hx, hy, behind) {
+    const p = [0, 0];
+    this.hx = this.lx = hx; this.hy = this.ly = hy; this.w = RING - 1;
+    for (let i = 0; i < RING; i++) { behind((RING - 1 - i) * this.step, p); this.rx[i] = p[0]; this.ry[i] = p[1]; }
   }
 
   sample(a) { // point at arc length a behind the head → (this.sx, this.sy)
@@ -429,18 +446,21 @@ class Dragon {
     if (!this.on) return;
     this.age += dt;
     const H = (env.D - this.z) * env.th, W = H * env.asp;
-    if (this.age > this.T || (this.dir < 0 && Math.abs(this.ax + this.hx - env.cx) > W * 1.1 + this.L * 1.3)) {
-      this.on = false; this.pos.fill(0, this.base * 3, (this.base + VPD) * 3); return;
-    }
+    if (this.age > this.T || (this.dir < 0 && Math.abs(this.ax + this.hx - env.cx) > W * 1.1 + this.L * 1.3)) return this.off();
     if (this.dir > 0) { this.ax = env.fx; this.ay = env.fy; } // rides along with the camera
     this.path(W, H); this.advance();
+    this.build(this.age, .6 * 2 * H / env.bufH);
+  }
 
-    const L = this.L, W0 = .028 * L, t = this.age, dir = this.dir, minW = .6 * 2 * H / env.bufH;
+  // Body, fins, whiskers, horns, mane, tail, jaw and legs along the trail. wave scales the swimming undulation;
+  // thick is the body half-width per metre of length.
+  build(t, minW, wave = 1, thick = .028) {
+    const L = this.L, W0 = thick * L, dir = this.dir;
     for (let k = 0; k < DN; k++) { this.sample(S[k] * L); CX[k] = this.sx; CY[k] = this.sy; }
     for (let k = 0; k < DN; k++) { // travelling-wave undulation across the trail
       const a = Math.max(k - 1, 0), b = Math.min(k + 1, DN - 1), s = S[k];
       const fx = CX[a] - CX[b], fy = CY[a] - CY[b], l = Math.sqrt(fx * fx + fy * fy) || 1;
-      const amp = L * Math.min(1, s * 3.5) * (.055 * Math.sin(7.2 * s - 2.1 * t + this.ph) + .015 * Math.sin(15 * s - 3.4 * t));
+      const amp = wave * L * Math.min(1, s * 3.5) * (.055 * Math.sin(7.2 * s - 2.1 * t + this.ph) + .015 * Math.sin(15 * s - 3.4 * t));
       PX[k] = CX[k] - fy / l * amp; PY[k] = CY[k] + fx / l * amp;
     }
     let v = 0;
@@ -505,7 +525,7 @@ class Dragon {
 }
 
 // ------------------------------------------------------------------ backdrop
-export function createBackdrop(scene, camera) {
+export function createBackdrop(scene, camera, hooks = {}) {
   const phone = matchMedia('(pointer: coarse)').matches;
   const uTime = { value: 0 };
   const fogCol = lin('#252a4a');
@@ -517,10 +537,10 @@ export function createBackdrop(scene, camera) {
     uniforms: {
       uTime, uCam: { value: new THREE.Vector2() }, uAsp: { value: 1 }, uHz: { value: .5 }, uMoonP: { value: new THREE.Vector2(.8, .8) }, uMoonR: { value: .06 },
       uTop: { value: lin(TN.bg_dark1) }, uMid: { value: lin('#171a2c') }, uHor: { value: lin('#2a2f55') }, uGlow: { value: lin('#3a2c66').multiplyScalar(.8) },
-      uMoon: { value: neon(TN.fg, 1.1) },
+      uMoon: { value: neon(TN.fg, 1.1) }, uFlash: { value: 0 }, uStorm: { value: 0 }, uBolt: { value: lin('#9fb4ff') },
     },
     vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 1., 1.); }',
-    fragmentShader: `uniform vec3 uTop, uMid, uHor, uGlow, uMoon; uniform vec2 uCam, uMoonP; uniform float uTime, uAsp, uHz, uMoonR; varying vec2 vUv;
+    fragmentShader: `uniform vec3 uTop, uMid, uHor, uGlow, uMoon, uBolt; uniform vec2 uCam, uMoonP; uniform float uTime, uAsp, uHz, uMoonR, uFlash, uStorm; varying vec2 vUv;
       ${GL_NOISE}
       void main() {
         float e = vUv.y - uHz; // screen heights above the city horizon
@@ -540,8 +560,10 @@ export function createBackdrop(scene, camera) {
         }
         vec2 m = (vUv - uMoonP) * vec2(uAsp, 1.) / uMoonR; float md = length(m), disc = smoothstep(1., .96, md);
         float mar = noise(m * 1.7 + 4.) * .6 + noise(m * 4.3 + 1.) * .3 + noise(m * 11. + 7.) * .1;
-        c = mix(c, uMoon * (1.1 - .4 * smoothstep(.42, .68, mar)) * (1. - .16 * md * md), disc);
-        c += uMoon * (1. - disc) * (.2 * exp(-(md - 1.) * 1.4) + .045 * exp(-(md - 1.) * .22));
+        vec3 moon = uMoon * (1. - .45 * uStorm); // storm cloud drifting over it
+        c = mix(c, moon * (1.1 - .4 * smoothstep(.42, .68, mar)) * (1. - .16 * md * md), disc);
+        c += moon * (1. - disc) * (.2 * exp(-(md - 1.) * 1.4) + .045 * exp(-(md - 1.) * .22));
+        c += uBolt * uFlash * (.12 + .3 * smoothstep(-.1, .5, e));
         gl_FragColor = vec4(c + (hash(gl_FragCoord.xy) - .5) * .0015, 1.);
       }`,
   })), 10);
@@ -584,9 +606,10 @@ export function createBackdrop(scene, camera) {
   // cloud belts: a low one wrapping Fuji's flanks, lit from below by the city, and high wisps near the moon
   const clouds = add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
     ...PREMUL,
-    uniforms: { uTime, uBase: { value: BASE }, uDark: { value: lin('#2a2e4c') }, uGlow: { value: lin('#7a5aa8') }, uMoonC: { value: lin('#c0caf5') }, uMoonP: { value: new THREE.Vector2(.6, .6) }, uAsp: { value: 1 } },
+    uniforms: { uTime, uBase: { value: BASE }, uDark: { value: lin('#2a2e4c') }, uGlow: { value: lin('#7a5aa8') }, uMoonC: { value: lin('#c0caf5') }, uMoonP: { value: new THREE.Vector2(.6, .6) }, uAsp: { value: 1 },
+      uFlash: { value: 0 }, uStorm: { value: 0 }, uBolt: { value: lin('#b8c6ff') } },
     vertexShader: 'varying vec2 vW, vN; void main() { vec4 w = modelMatrix * vec4(position, 1.); vW = w.xy; gl_Position = projectionMatrix * viewMatrix * w; vN = gl_Position.xy / gl_Position.w; }',
-    fragmentShader: `uniform float uTime, uBase, uAsp; uniform vec3 uDark, uGlow, uMoonC; uniform vec2 uMoonP; varying vec2 vW, vN;
+    fragmentShader: `uniform float uTime, uBase, uAsp, uFlash, uStorm; uniform vec3 uDark, uGlow, uMoonC, uBolt; uniform vec2 uMoonP; varying vec2 vW, vN;
       ${GL_NOISE}
       void main() {
         float y = vW.y - uBase;
@@ -595,18 +618,19 @@ export function createBackdrop(scene, camera) {
         vec2 p = vec2((vW.x + uTime * 7.) / 900., y / 150.);
         float n = 0., a = .5;
         for (int i = 0; i < 5; i++) { n += a * noise(p); p = p * 2.03 + vec2(17.1, 3.7); a *= .5; }
-        float d = smoothstep(.36, .7, n) * band;
+        float d = smoothstep(.36 - .16 * uStorm, .7 - .1 * uStorm, n) * band;
         if (d < .005) discard;
         float moon = exp(-2.2 * length((vN - uMoonP) * vec2(uAsp, 1.)));
-        vec3 c = mix(uDark, uGlow, (1. - smoothstep(150., 1000., y)) * (1. - .5 * n)) + uMoonC * moon * .5 * (1. - n);
-        gl_FragColor = vec4(c * d * .75, d * .6);
+        vec3 c = mix(uDark, uGlow, (1. - smoothstep(150., 1000., y)) * (1. - .5 * n)) + uMoonC * moon * .5 * (1. - n) * (1. - .5 * uStorm);
+        c += uBolt * uFlash * (.6 + .8 * (1. - n)); // lit from inside by the strike
+        gl_FragColor = vec4(c * d * .75, d * (.6 + .25 * uStorm));
       }`,
   })), 0, -4200);
 
   const layers = LAYERS.map((o, i) => add(skylineLayer(o, uTime, fogCol), 2 + i, o.z));
 
   // dragons
-  const dmesh = add(dragonMesh(DRAGONS.length), 0);
+  const dmesh = add(dragonMesh(DRAGONS), 0);
   const dpos = dmesh.geometry.attributes.position, dr = rng(2024);
   const dragons = DRAGONS.map((s, i) => new Dragon(s, i, dpos.array, dr));
 
@@ -643,38 +667,107 @@ export function createBackdrop(scene, camera) {
     fragmentShader: 'varying vec3 vC; void main() { gl_FragColor = vec4(vC * smoothstep(.5, .1, length(gl_PointCoord - .5)), 1.); }',
   })), 0, -1100);
 
-  // snow: flakes live at fixed distances from the camera and wrap inside its view (endless, world-stable when
-  // panning); each is a quad stretched along its motion relative to the camera → faint streaks at speed
+  // weather: drops live at fixed distances from the camera and wrap inside its view (endless, world-stable when
+  // panning). Each is a cherry-blossom petal (tumbling, drifting) or a raindrop, in the mix setLook() picks from the
+  // rider's progress; every drop is a quad stretched along its motion relative to the camera → streaks at speed
   const SN = phone ? 1100 : 2600, sa = new Float32Array(SN * 4), sr = rng(99);
   for (let i = 0; i < SN; i++) sa.set([sr(), sr(), 7 + 143 * sr() ** 1.3, sr()], i * 4);
   const sg = new THREE.InstancedBufferGeometry();
   sg.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0], 3)).setIndex([0, 1, 2, 0, 2, 3]);
   sg.setAttribute('aF', new THREE.InstancedBufferAttribute(sa, 4)); sg.instanceCount = SN;
-  const snowU = { uTime, uCam: { value: new THREE.Vector2() }, uVel: { value: new THREE.Vector2() }, uAsp: { value: 1 }, uK: { value: .73 }, uBufH: { value: 1000 }, uCol: { value: lin(TN.fg) } };
+  const snowU = { uTime, uCam: { value: new THREE.Vector2() }, uVel: { value: new THREE.Vector2() }, uAsp: { value: 1 }, uK: { value: .73 }, uBufH: { value: 1000 },
+    uPetal: { value: .45 }, uRain: { value: 0 }, uPink: { value: lin('#f4a9c9') }, uDrop: { value: lin('#a9c4ff') } };
   add(new THREE.Mesh(sg, new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, uniforms: snowU,
-    vertexShader: `attribute vec4 aF; uniform float uTime, uAsp, uK, uBufH; uniform vec2 uCam, uVel; varying vec2 vQ; varying float vA, vK;
+    vertexShader: `attribute vec4 aF; uniform float uTime, uAsp, uK, uBufH, uPetal, uRain; uniform vec2 uCam, uVel; varying vec2 vQ; varying float vA, vK, vR;
       void main() {
-        float d = aF.z, r = aF.w; vec2 box = d * uK * vec2(uAsp, 1.) * 1.2;
-        vec2 fall = vec2(1.2 + 1.6 * r, -1.1 - 1.6 * fract(r * 7.3));
-        vec2 w = aF.xy * box + fall * uTime + vec2(.7 * sin(uTime * (.6 + r) + r * 40.), 0.) - uCam;
-        vec2 c = mod(w, box) - .5 * box;
-        float rad = max(.012 + .016 * r, .9 * d * uK / uBufH);
-        vec2 sv = (fall - uVel) / 60.; float sl = min(length(sv) * smoothstep(4., 14., length(fall - uVel)), d * uK * .18);
-        vec2 dir = sl > 1e-4 ? normalize(sv) : vec2(0., 1.);
-        vec2 p = c - dir * sl * .5 + dir * position.x * (rad + sl * .5) + vec2(-dir.y, dir.x) * position.y * rad;
-        vQ = position.xy; vK = sl * .5 / rad; vA = .75 * smoothstep(7., 14., d) * pow(rad / (rad + sl * .5), 1.3);
+        float d = aF.z, r = aF.w, rain = step(fract(r * 91.7), uRain * .999);
+        if (rain < .5 && fract(r * 53.1) >= uPetal) { gl_Position = vec4(0., 0., -2., 1.); return; }
+        vec2 box = d * uK * vec2(uAsp, 1.) * 1.2;
+        vec2 fall = rain > .5 ? vec2(2.5 + 1.5 * r, -15. - 6. * fract(r * 7.3)) : vec2(1.4 + 1.8 * r, -.8 - 1.1 * fract(r * 7.3));
+        vec2 sway = (1. - rain) * vec2(.9 * sin(uTime * (.6 + r) + r * 40.), .35 * sin(uTime * (1.1 + r) + r * 13.));
+        vec2 c = mod(aF.xy * box + fall * uTime + sway - uCam, box) - .5 * box;
+        float px = .9 * d * uK / uBufH, rad = max(rain > .5 ? .006 : .036 + .03 * r, px);
+        vec2 rel = fall - uVel;
+        float sl = rain > .5 ? min(length(rel) * .02, d * uK * .25) : min(length(rel) / 60. * smoothstep(4., 14., length(rel)), d * uK * .18);
+        float spin = uTime * (1. + 2. * r) + r * 40.;
+        vec2 dir = rain > .5 || sl > 1e-4 ? normalize(rel + 1e-5) : vec2(cos(spin), sin(spin));
+        float across = rain > .5 ? rad : max(rad * .62 * (.25 + .75 * abs(sin(uTime * (1.3 + r) + r * 9.))), px); // petals flip edge-on as they tumble
+        vec2 p = c - dir * sl * .5 + dir * position.x * (rad + sl * .5) + vec2(-dir.y, dir.x) * position.y * across;
+        vQ = position.xy; vK = sl * .5 / rad; vR = rain;
+        vA = smoothstep(7., 14., d) * (rain > .5 ? .3 * (1. - .5 * d / 150.) : .85 * pow(rad / (rad + sl * .5), 1.3));
         gl_Position = projectionMatrix * vec4(p, -d, 1.);
       }`,
-    fragmentShader: `uniform vec3 uCol; varying vec2 vQ; varying float vA, vK;
-      void main() { float d = length(vec2(max(abs(vQ.x) * (1. + vK) - vK, 0.), vQ.y)); gl_FragColor = vec4(uCol, vA * smoothstep(1., .25, d)); }`,
+    fragmentShader: `uniform vec3 uPink, uDrop; varying vec2 vQ; varying float vA, vK, vR;
+      void main() {
+        vec2 q = vec2(max(abs(vQ.x) * (1. + vK) - vK, 0.), vQ.y);
+        if (vR > .5) { gl_FragColor = vec4(uDrop, vA * smoothstep(1., .2, length(q))); return; }
+        float notch = smoothstep(.45, .25, length(vQ - vec2(1., 0.))) * step(vK, .5); // the petal's notched tip
+        gl_FragColor = vec4(uPink * (.8 + .2 * vQ.y), vA * smoothstep(1., .55, length(q)) * (1. - notch));
+      }`,
   })), 0);
 
+  // lightning: a jagged bolt (main channel + two forks) from the cloud base into the city, flickering out while
+  // the sky and clouds flash. Storms schedule strikes; strike() can also place one (the reveal).
+  const BP = 34, bolt = { t: -99, k: 0 }, bpos = new Float32Array(BP * 2 * 3), bside = new Float32Array(BP * 2), bidx = [], br = rng(7);
+  for (const [a, b] of [[0, 20], [20, 27], [27, 34]]) for (let i = a; i < b - 1; i++) bidx.push(i * 2, i * 2 + 2, i * 2 + 1, i * 2 + 1, i * 2 + 2, i * 2 + 3);
+  for (let i = 0; i < BP * 2; i++) bside[i] = i % 2 ? 1 : -1;
+  const bgeo = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(bpos, 3).setUsage(THREE.DynamicDrawUsage))
+    .setAttribute('side', new THREE.BufferAttribute(bside, 1)).setIndex(bidx);
+  const boltU = { uA: { value: 0 }, uCol: { value: neon('#c8d4ff', 2.6) } };
+  const boltMesh = add(new THREE.Mesh(bgeo, new THREE.ShaderMaterial({
+    ...PREMUL, side: THREE.DoubleSide, uniforms: boltU,
+    vertexShader: 'attribute float side; varying float vS; void main() { vS = side; gl_Position = projectionMatrix * viewMatrix * vec4(position, 1.); }',
+    fragmentShader: 'uniform float uA; uniform vec3 uCol; varying float vS; void main() { float d = abs(vS); gl_FragColor = vec4(uCol * uA * (smoothstep(.35, .1, d) + .35 * (1. - d) * (1. - d)), 0.); }',
+  })), 1);
+  boltMesh.visible = false;
+  const BX = new Float32Array(20), BY = new Float32Array(20);
+  const jag = (a, b, x0, y0, x1, y1, z, w, j) => { // points a..b-1 of a jagged strip from (x0,y0) to (x1,y1); keeps them in BX/BY
+    const n = b - a; let ox = 0;
+    for (let i = 0; i < n; i++) {
+      const u = i / (n - 1), mid = i > 0 && i < n - 1;
+      ox = mid ? ox * .5 + (br() - .5) * j : 0;
+      BX[i] = x0 + (x1 - x0) * u + ox; BY[i] = y0 + (y1 - y0) * u + (mid ? (br() - .5) * j * .3 : 0);
+    }
+    for (let i = 0; i < n; i++) {
+      const i0 = Math.max(i - 1, 0), i1 = Math.min(i + 1, n - 1);
+      let tx = BX[i1] - BX[i0], ty = BY[i1] - BY[i0]; const l = Math.hypot(tx, ty) || 1; tx /= l; ty /= l;
+      const ww = w * (1 - .6 * i / n), o = (a + i) * 6;
+      bpos[o] = BX[i] - ty * ww; bpos[o + 1] = BY[i] + tx * ww; bpos[o + 2] = z; bpos[o + 3] = BX[i] + ty * ww; bpos[o + 4] = BY[i] - tx * ww; bpos[o + 5] = z;
+    }
+  };
+  function strike(x, y0, y1, z, k = 1) { // k > 1.5: right on top of you (no thunder delay)
+    const w = Math.max(.6, (camera.position.z - z) * .0017), L = y0 - y1;
+    jag(0, 20, x, y0, x + (br() - .5) * L * .25, y1, z, w, L * .09);
+    const f1 = [BX[6], BY[6]], f2 = [BX[11], BY[11]];
+    for (const [a, b, [fx, fy]] of [[20, 27, f1], [27, 34, f2]]) {
+      const len = L * (.22 + .15 * br()), sd = br() < .5 ? -1 : 1;
+      jag(a, b, fx, fy, fx + sd * len * .6, fy - len, z, w * .6, len * .15);
+    }
+    bgeo.attributes.position.needsUpdate = true;
+    bolt.t = env.time; bolt.k = k;
+    hooks.bolt?.(k > 1.5 ? .05 : .5 + br() * 1.2, k);
+  }
+
   // per-frame state lives in object fields (doubles in closure variables get re-boxed on every write)
-  const env = { cx: 0, cy: 0, fx: 0, fy: 0, vx: 0, vy: 0, D: 1, th: 1, asp: 1, bufH: 1000, winH: 0, speed: 0, next: 0, time: 0 };
+  const env = { cx: 0, cy: 0, fx: 0, fy: 0, vx: 0, vy: 0, D: 1, th: 1, asp: 1, bufH: 1000, winH: 0, speed: 0, next: 0, time: 0, boltT: 3 };
+  const look = { p: 0, won: false, legacy: 0, petals: .45, rain: 0, storm: 0 }; // rider progress, from setLook()
   let first = true;
 
   return {
+    strike,
+    // p: how far the rider has turned (items.js progress), won: already a dragon, legacy: dragons from past
+    // playthroughs, petals / rain / storm: the weather
+    setLook(l) {
+      Object.assign(look, l);
+      snowU.uPetal.value = look.petals; snowU.uRain.value = look.rain;
+      sky.material.uniforms.uStorm.value = clouds.material.uniforms.uStorm.value = look.storm;
+      if (look.won) dragons[YOU].off();
+    },
+    escort() { // the reveal: the watcher is gone (it's you now) and the others come to fly alongside
+      dragons[YOU].off();
+      dragons.forEach((d, i) => { if (i !== YOU && (i !== LEGACY || look.legacy) && !d.on) d.spawn(env, true, { pace: 1 }); });
+    },
     update(dt) {
       dt = Math.min(Math.max(dt || 0, 0), .1);
       const t = (env.time += dt);
@@ -718,17 +811,29 @@ export function createBackdrop(scene, camera) {
         fw.next[s] = t + 6 + fr() * 10;
       }
 
-      if (first) { dragons[2].spawn(env, true); env.next = t + 4; for (let s = 0; s < FS; s++) fw.next[s] += t; }
+      if (first) { dragons[3].spawn(env, true); env.next = t + 4; for (let s = 0; s < FS; s++) fw.next[s] += t; }
       else if (t >= env.next) {
-        for (let i = 0, j = Math.floor(dr() * dragons.length); i < dragons.length; i++) {
-          const d = dragons[(i + j) % dragons.length];
-          if (!d.on) { d.spawn(env, false); break; }
+        // the magenta one (the rider's colours) turns up more, comes closer and lingers, the further the rider has turned
+        if (!look.won && !dragons[YOU].on && dr() < .15 + .6 * look.p) dragons[YOU].spawn(env, false, { near: look.p, pace: smooth(.6, .95, look.p) });
+        else for (let i = 0, j = Math.floor(dr() * dragons.length); i < dragons.length; i++) {
+          const k = (i + j) % dragons.length, d = dragons[k];
+          if (d.on || k === YOU || (k === LEGACY && !look.legacy)) continue;
+          d.spawn(env, false); break;
         }
         env.next = t + 7 + dr() * 6;
       }
       for (let i = 0; i < dragons.length; i++) dragons[i].update(dt, env);
       dmesh.material.uniforms.uT.value = t;
       dpos.needsUpdate = true;
+
+      if (look.storm > 0 && t >= env.boltT) { // lightning, every few seconds in a full storm
+        const z = -1400 - br() * 1200, H = (D - z) * th;
+        strike(env.fx + (br() - .5) * 1.6 * H * asp, BASE + 700 + br() * 400, BASE + 10, z, .6 + .5 * br());
+        env.boltT = t + (4 + 12 * (1 - look.storm)) * (.4 + br());
+      } else if (look.storm <= 0) env.boltT = Math.max(env.boltT, t + 3);
+      const ba = t - bolt.t, fl = ba < 0 || ba > 1 ? 0 : Math.exp(-ba * 5) * (Math.floor(ba * 14) % 3 === 1 ? .3 : 1); // two-stroke flicker
+      boltMesh.visible = fl > .01; boltU.uA.value = fl * Math.min(1.4, bolt.k);
+      sky.material.uniforms.uFlash.value = clouds.material.uniforms.uFlash.value = fl * Math.min(1, bolt.k) * .9;
       first = false;
     },
   };

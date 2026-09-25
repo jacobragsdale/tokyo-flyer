@@ -1,7 +1,10 @@
 // Vector-art toolkit shared with view.js (palette, HDR neon colours, one-draw fill+stroke meshes, ribbons)
-// and the rider: a seated neon-vector character whose every sled / glider / booster tier is baked into ONE
-// skinned mesh (bones = 2D affine uniforms, tiers toggled per vertex group), plus a scarf and booster flame.
+// and the rider: a seated neon-vector character whose every ride / glider / booster tier is baked into ONE
+// skinned mesh (bones = 2D affine uniforms, tiers toggled per vertex group), plus streamers (scarf, whiskers,
+// carp streamer) and the booster flame. Group 0 is the body: its tiers are cumulative outfit stages, the
+// kid's slow, disguised turn into a dragon (items.js DRIFT).
 import * as THREE from 'three';
+import { stage, FINS } from './items.js';
 
 export const TN = {
   bg: '#1a1b26', bg_dark: '#16161e', bg_dark1: '#0c0e14', bg_highlight: '#292e42', storm: '#24283b', terminal_black: '#414868',
@@ -44,8 +47,8 @@ void main() {
   vec2 p = position.xy, n = nrm.xy;
   vCol = col; vS = vec2(nrm.z, kw.x);
 #ifdef SKIN
-  float g = floor(bv.y / 8. + .01);
-  if (abs(uSel[int(g)] - (bv.y - g * 8.)) > .5) { gl_Position = vec4(0., 0., -2., 1.); return; }
+  float g = floor(bv.y / 8. + .01), tr = bv.y - g * 8.; // group 0 shows every stage up to uSel.x, the others one tier
+  if (g < .5 ? tr > uSel.x + .5 : abs(uSel[int(g)] - tr) > .5) { gl_Position = vec4(0., 0., -2., 1.); return; }
   mat3 m = uBones[int(bv.x + .5)];
   p = (m * vec3(p, 1.)).xy;
   if (kw.x > .5) n = normalize(mat2(m) * n + 1e-6) * length(n);
@@ -61,19 +64,20 @@ void main() {
   gl_Position = projectionMatrix * mv;
 }`;
 const VEC_FS = `
-uniform float uSoft; varying vec4 vCol; varying vec2 vS;
+uniform float uSoft, uAlpha; varying vec4 vCol; varying vec2 vS;
 ${TUBE}
 void main() {
   vec3 c = vCol.rgb;
   c = mix(c, c / max(max(c.r, c.g), max(c.b, 1.)), uSoft); // far zoom: no HDR, so a tiny figure doesn't bloom into a blob
-  if (vS.y < .5) { gl_FragColor = vec4(c * vCol.a, vCol.a); return; }
-  if (vS.y > 1.5) { gl_FragColor = vec4(c * vCol.a * (1. - .7 * uSoft), 0.); return; }
   float d = abs(vS.x);
-  gl_FragColor = vec4(tube(c * vCol.a, d + uSoft * .45 * step(.34, d), fwidth(d) * .75, .34), 0.);
+  if (vS.y < .5) gl_FragColor = vec4(c * vCol.a, vCol.a);
+  else if (vS.y > 1.5) gl_FragColor = vec4(c * vCol.a * (1. - .7 * uSoft), 0.);
+  else gl_FragColor = vec4(tube(c * vCol.a, d + uSoft * .45 * step(.34, d), fwidth(d) * .75, .34), 0.);
+  gl_FragColor *= uAlpha;
 }`;
 
 export function vecMaterial({ bones, sel, depthTest = true } = {}) {
-  const uniforms = { uPxK: U.uPxK, uTime: U.uTime, uSoft: { value: 0 } };
+  const uniforms = { uPxK: U.uPxK, uTime: U.uTime, uSoft: { value: 0 }, uAlpha: { value: 1 } };
   if (bones) Object.assign(uniforms, { uBones: { value: bones }, uSel: { value: sel } });
   return new THREE.ShaderMaterial({
     ...PREMUL, depthTest, uniforms, vertexShader: VEC_VS, fragmentShader: VEC_FS,
@@ -196,6 +200,54 @@ export const ribbonMaterial = (c0, c1, core, opaque = 0, fade = 1) => new THREE.
   uniforms: { uPxK: U.uPxK, uC0: { value: c0 }, uC1: { value: c1 }, uCore: { value: core }, uOpaque: { value: opaque }, uFade: { value: fade } },
 });
 
+// The scarf: an opaque neon ribbon that, late in the game, grows dorsal fins, scales and energy pulses running
+// to the tip (the sky dragons' skin). The strip is widened by uFin to leave room for the fins.
+const scarfMaterial = (c0, c1) => new THREE.ShaderMaterial({
+  ...PREMUL, depthTest: false, vertexShader: RIB_VS,
+  uniforms: { uPxK: U.uPxK, uTime: U.uTime, uC0: { value: c0 }, uC1: { value: c1 }, uFin: { value: 0 } },
+  fragmentShader: `uniform vec3 uC0, uC1; uniform float uTime, uFin; varying float vS, vU;
+  ${TUBE}
+  void main() {
+    float u = vU, v = vS, b = 1. / (1. + .9 * uFin), d = abs(v) / b, aa = fwidth(d) * .75;
+    vec3 c = mix(uC0, uC1, u);
+    float body = 1. - smoothstep(.62 - aa, .62 + aa, d);
+    vec2 q = vec2(u * 30., v / b * 1.4 + .5); q.x += .5 * floor(q.y);
+    float sc = smoothstep(.14, 0., abs(length(vec2(fract(q.x) - .5, fract(q.y))) - .55)) * (1. - smoothstep(.15, .4, fwidth(q.x)));
+    float pulse = pow(.5 + .5 * sin(u * 26. - uTime * 5.), 10.);
+    vec3 skin = c * (1. + uFin * (sc * .6 + pulse * 1.1));
+    vec4 o = d < 1. ? vec4(body > 0. ? skin * body + tube(c, d, aa, .62) * (1. - body) : tube(c, d, aa, .62), body) : vec4(0.);
+    if (uFin > 0. && v < -b) { // fins on the dorsal edge (v < 0 faces up while the scarf streams back from a rider going right)
+      float h = (-v - b) / (1. - b), f = fract(u * 9.);
+      float prof = (1. - f) * smoothstep(.04, .16, u) * (1. - smoothstep(.8, .97, u)) * uFin;
+      float fin = 1. - smoothstep(prof - .08, prof, h), rim = fin * smoothstep(prof - .3, prof - .04, h);
+      o += vec4(uC1 * (.3 + 1.8 * rim) * fin, .35 * fin * (1. - rim));
+    }
+    gl_FragColor = o;
+  }`,
+});
+
+// Koinobori: a carp windsock streaming from its pole. u runs mouth → tail, v across (v < 0 is the top side).
+const koiMaterial = () => new THREE.ShaderMaterial({
+  ...PREMUL, depthTest: false, vertexShader: RIB_VS,
+  uniforms: { uPxK: U.uPxK, uRed: { value: C(TN.red1, 0.95) }, uGold: { value: C(TN.yellow, 0.9) }, uInk: { value: C(TN.bg_dark1) },
+    uWhite: { value: C(TN.fg, 0.95) }, uEdge: { value: neon(TN.orange, 1.5) } },
+  fragmentShader: `uniform vec3 uRed, uGold, uInk, uWhite, uEdge; varying float vS, vU;
+  ${TUBE}
+  void main() {
+    float u = vU, v = vS, av = abs(v);
+    if (u > .84 && av < (u - .84) * 5.) discard; // forked tail
+    float aa = fwidth(av) * .75, body = 1. - smoothstep(.8 - aa, .8 + aa, av);
+    vec2 q = vec2(u * 14., v * 2.2 + .5); q.x += .5 * floor(q.y);
+    float sc = smoothstep(.13, 0., abs(length(vec2(fract(q.x) - .5, fract(q.y))) - .5)) * step(.2, u) * step(u, .84);
+    vec3 c = mix(uRed, mix(uRed, uWhite, .45), smoothstep(.1, .8, v)) + uGold * sc * .55;
+    c = mix(c, uGold * .8, step(.84, u) * .6);                       // tail
+    c = mix(c, uWhite, step(u, .05));                                 // mouth hoop
+    float er = length(vec2((u - .14) * 7., (v + .3) * 1.1));          // eye
+    c = mix(c, uWhite, smoothstep(.34, .3, er)); c = mix(c, uInk, smoothstep(.2, .16, er));
+    gl_FragColor = vec4(body > 0. ? c * body + tube(uEdge, av, aa, .8) * (1. - body) : tube(uEdge, av, aa, .8), body * .96);
+  }`,
+});
+
 export class Ribbon {
   constructor(n, mat, z = 0) {
     this.n = n; this.z = z;
@@ -227,34 +279,46 @@ export class Ribbon {
 // ------------------------------------------------------------------ rider art
 
 const BONE = { ROOT: 0, LEGS: 1, TORSO: 2, HEAD: 3, ARM: 4, GLIDER: 5, BOOST: 6 }, NB = 7;
-const SEAT = [0.13, 0.17, 0.12, 0.3, 0.24, 0.37];                 // hip height per sled tier
-const MOUNT = [[-0.72, 0.2], [-0.62, 0.17], [-0.7, 0.08], [-0.66, 0.27], [-0.7, 0.2], [-0.68, 0.3]]; // booster mount
+const SEAT = [0.13, 0.31, 0.17, 0.27, 0.38, 0.36];                // hip height per ride tier
+const LEGA = [0, 0, 0, 0, -0.3, 0];                               // resting leg angle (Bullet Nose: feet down its flank)
+const MOUNT = [[-0.72, 0.2], [-0.72, 0.26], [-0.68, 0.14], [-0.68, 0.24], [-0.84, 0.27], [-0.7, 0.3]]; // booster mount
+const PEARL = [[1.25, 1.55], [1.9, 0.75]]; // where the Flaming Pearl floats: ahead of the kid / ahead of the dragon's snout
+const SNOUT = [0.9, 0.55];                 // rider space: the dragon form's head
 const ART = 1.15; // hero scale: reads better at the in-run zoom
 const HIP_X = -0.12, NECK = [0.02, 0.53], SHOULDER = [0.0, 0.44], HAND = [0.35, -0.19];
-// gliders: arm angle when deployed, hand-held (attached at the hand) or on the torso, open angle, stowed pose
+const CHEEK = [0.15, 0.075]; // head space: where the earbud cables (whiskers) leave the face
+const POLE = [-0.25, 1.42];  // glider space: top of the koinobori pole, where the carp is tied on
+// gliders: arm angle when deployed, hand-held (attached at the hand) or on the torso, open angle, stowed pose,
+// and optionally a torso / head pose while gliding
 const GL = [null,
   { arm: 2.0, hand: 1, a: 0.3, stow: [-0.17, 0.03, 0.4, 0.13, 0.75] },   // wagasa umbrella
-  { arm: 1.1, hand: 1, a: 0.0, stow: [-0.24, 0.2, 0.2, 0.3, 0.3] },      // tako kite
+  { arm: 1.3, hand: 1, a: -0.12, stow: [-0.14, 0.08, 0.42, 0.5, 0.5] },  // koinobori: pole strapped to the back
   { arm: 1.55, hand: 1, a: -0.06, stow: [-0.2, 0.3, -1.35, 0.42, 0.12] }, // neon hang glider
-  { arm: 2.95, at: [0, 0], a: 0, stow: [0, 0.44, 0, 0.02, 0.02] },       // night wingsuit (hidden when stowed)
-  { arm: 0.45, at: [-0.1, 0.42], a: 0, stow: [-0.1, 0.42, 0.55, 0.42, 0.45] }, // dragon wings
+  { arm: 2.95, at: [0, 0], a: 0, stow: [0, 0.44, 0, 0.02, 0.02] },       // fin suit (hidden when stowed)
+  { arm: 0.75, at: [0, 0], a: 0, stow: [0, 0, 0, 1, 1], torso: -0.34, head: 0.3 }, // no wings: reach forward and swim
 ];
 // booster flame per tier: nozzle (booster space), length, width, core/mid/tip colours, shock diamonds
 const FL = [null,
   { at: [-0.2, 0.09], len: 0.75, w: 0.24, c: [neon(TN.yellow, 3.5), neon(TN.orange, 1.8), neon(TN.red1, 0.8)], dia: 0, spark: neon(TN.yellow, 2.4) },
   { at: [-0.34, 0.06], len: 1.15, w: 0.22, c: [neon(TN.blue6, 3.8), neon(TN.blue, 1.8), neon(TN.orange, 0.9)], dia: 0, spark: neon(TN.orange, 2.2) },
   { at: [-0.2, 0.06], len: 1.6, w: 0.27, c: [neon(TN.blue6, 4), neon(TN.cyan, 2), neon(TN.blue0, 1)], dia: 1, spark: neon(TN.cyan, 2.4) },
-  { at: [-0.36, 0.05], len: 2.0, w: 0.42, c: [neon(TN.yellow, 3.2), neon(TN.red, 1.5), neon(TN.purple, 0.8)], dia: 0, spark: neon(TN.orange, 2.2) },
+  { at: [-0.08, 0.0], len: 1.05, w: 0.36, c: [neon(TN.fg, 3.4), neon(TN.orange, 1.7), neon(TN.magenta2, 0.8)], dia: 0, spark: neon(TN.yellow, 2.2) },
 ];
+
+// rounded "cat ear" poking out of the beanie at angle t (they sweep back, like horns)
+function ear(a, hc, r, t, h, fc, lc) {
+  const P = (ang, rr) => [hc[0] + Math.cos(ang) * rr, hc[1] + Math.sin(ang) * rr];
+  a.shape([...P(t - 0.28, r * 0.92), ...P(t - 0.12, r + h * 0.8), ...P(t + 0.02, r + h), ...P(t + 0.1, r + h * 0.75), ...P(t + 0.26, r * 0.92)], fc, lc, 0.01);
+}
 
 function buildArt() {
   const a = new Art(true);
   const on = (bone, group = 0, tier = 0) => { a.bone = bone; a.vis = group * 8 + tier; return a; };
   const INK = C(TN.bg_highlight), W = 0.012;
   const jacket = C(TN.purple, 0.5), jacketL = neon(TN.magenta, 0.85), pink = C(TN.magenta2, 0.6), pinkL = neon(TN.magenta2, 0.75);
+  const hc = [0.035, 0.165], br = 0.15; // head centre and beanie radius (head space)
 
   // --- gliders behind the body
-  on(BONE.GLIDER, 2, 5); dragonWing(a, 0.55, true);
   on(BONE.GLIDER, 2, 1); // wagasa: shaft from the hand, canopy above
   {
     const edge = [-0.82, 0.98, -0.6, 1.0, -0.4, 0.97, -0.2, 1.0, 0, 0.97, 0.2, 1.0, 0.4, 0.97, 0.6, 1.0, 0.82, 0.98];
@@ -266,16 +330,15 @@ function buildArt() {
     a.shape(circle(0, 1.33, 0.05, 10), C(TN.yellow, 0.4), neon(TN.yellow, 2), 0.008);
     a.shape(rrect(-0.03, -0.12, 0.03, 0.08, 0.02), C(TN.orange, 0.15), neon(TN.orange, 1.2), 0.007);
   }
-  on(BONE.GLIDER, 2, 2); // tako kite: lines from the hand to a painted kite behind and above
+  on(BONE.GLIDER, 2, 2); // koinobori: bamboo pole with a spinning arrow wheel on top (the carp is a streamer)
   {
-    const k = xf([-0.5, -0.62, 0.5, -0.62, 0.5, 0.62, -0.5, 0.62], 0.35, -0.85, 1.35);
-    a.line([0, 0, k[0], k[1]], neon(TN.fg, 0.8), 0.004).line([0, 0, k[6], k[7]], neon(TN.fg, 0.8), 0.004);
-    a.line(xf([-0.3, -0.6, -0.55, -0.95, -0.35, -1.25, -0.6, -1.6], 0.35, -0.85, 1.35), neon(TN.magenta2, 1.6), 0.012);
-    a.line(xf([0.2, -0.6, 0.05, -1.0, 0.25, -1.3, 0.0, -1.7], 0.35, -0.85, 1.35), neon(TN.cyan, 1.6), 0.012);
-    a.shape(k, C(TN.fg, 0.55), neon(TN.red1, 1.8), 0.016, 0.95);
-    a.line([k[0], k[1], k[4], k[5]], C(TN.orange, 0.35), 0.006).line([k[2], k[3], k[6], k[7]], C(TN.orange, 0.35), 0.006);
-    a.shape(xf(circle(0, 0.05, 0.3, 16), 0.35, -0.85, 1.35), C(TN.red1, 0.7), neon(TN.red1, 1.4), 0.01);
-    a.line(xf([-0.22, 0.12, -0.05, -0.06, 0.08, 0.12, 0.22, -0.04], 0.35, -0.85, 1.35), neon(TN.fg, 2.2), 0.018);
+    const [px, py] = POLE;
+    a.line([0.02, -0.16, px, py + 0.1], neon(TN.green, 0.9), 0.013);
+    for (let k = 1; k < 5; k++) { const u = k / 5, x = 0.02 + (px - 0.02) * u, y = -0.16 + (py + 0.26) * u; a.line([x - 0.028, y - 0.004, x + 0.028, y + 0.004], neon(TN.yellow, 0.9), 0.006); }
+    const cx = px, cy = py + 0.16;
+    for (let k = 0; k < 8; k++) { const t = (k / 8) * TAU; a.line([cx, cy, cx + Math.cos(t) * 0.075, cy + Math.sin(t) * 0.075], neon(TN.yellow, 1.2), 0.005, false, 1, 3); }
+    a.line(circle(cx, cy, 0.075, 16), neon(TN.orange, 1.6), 0.008, true);
+    a.dot(cx, cy + 0.11, 0.07, neon(TN.yellow, 2.2)).shape(circle(cx, cy + 0.11, 0.022, 8), C(TN.yellow, 0.6), neon(TN.yellow, 2), 0.006);
   }
   on(BONE.GLIDER, 2, 3); // neon hang glider: thin sail profile + A-frame down to the hands
   {
@@ -289,7 +352,7 @@ function buildArt() {
     a.dot(0.85, 1.14, 0.09, neon(TN.blue6, 3)).dot(-1.7, 1.06, 0.08, neon(TN.magenta2, 3), 1, 1);
   }
 
-  // --- booster (behind the sled)
+  // --- booster (behind the ride)
   on(BONE.BOOST, 3, 1); // hanabi: two paper rockets
   for (const [dx, dy] of [[0, 0], [0.06, 0.1]]) {
     const b = [-0.18 + dx, dy, 0.3 + dx, dy, 0.42 + dx, dy + 0.045, 0.3 + dx, dy + 0.09, -0.18 + dx, dy + 0.09];
@@ -305,52 +368,115 @@ function buildArt() {
   a.shape(rrect(-0.14, -0.03, 0.36, 0.15, 0.08), C(TN.bg_highlight), neon(TN.blue, 1.5), W);
   for (let i = 0; i < 3; i++) a.line(arc(0.02 + i * 0.1, 0.06, 0.025, 0.095, -Math.PI / 2, Math.PI / 2, 6), neon(TN.cyan, 2.2), 0.008, false, 1, 3);
   a.shape(arc(-0.15, 0.06, 0.045, 0.1, 0, TAU * 0.95, 12), C(TN.blue6, 0.6), neon(TN.blue6, 3.2), 0.01);
-  on(BONE.BOOST, 3, 4); // dragon's breath: a little dragon head breathing backwards
+  on(BONE.BOOST, 3, 4); // flaming pearl (hōju): flame tongues licking back off a glowing jewel; floats ahead of you
   {
-    const up = [0.28, 0.04, 0.2, 0.16, 0.02, 0.19, -0.16, 0.14, -0.36, 0.1, -0.3, 0.06, -0.1, 0.07, 0.05, 0.03];
-    const lo = [0.22, 0.02, 0.0, -0.02, -0.2, -0.04, -0.32, 0.0, -0.14, 0.03, 0.05, 0.04];
-    a.shape(lo, C(TN.teal, 0.3), neon(TN.green1, 1.6), W).shape(up, C(TN.teal, 0.35), neon(TN.green1, 1.8), W);
-    a.line([0.12, 0.17, 0.3, 0.3, 0.42, 0.28], neon(TN.yellow, 1.6), 0.01).line([0.02, 0.19, 0.12, 0.34], neon(TN.yellow, 1.4), 0.009);
-    a.line([-0.3, 0.09, -0.42, 0.2, -0.5, 0.16], neon(TN.cyan, 1.5), 0.005).dot(-0.02, 0.13, 0.04, neon(TN.yellow, 5));
+    a.dot(0, 0, 0.36, neon(TN.orange, 0.4), 1, 3);
+    for (const [ang, len] of [[1.35, 0.3], [1.9, 0.4], [2.5, 0.34], [3.1, 0.3], [3.75, 0.26], [4.5, 0.22]]) { // licking up and back, like a comet's
+      const c = Math.cos(ang), sn = Math.sin(ang), bx = c * 0.1, by = sn * 0.1, nx = -sn * 0.045, ny = c * 0.045;
+      const tx = c * 0.45 * len - 0.85 * len - 0.04, ty = sn * 0.5 * len + 0.05 + 0.1 * len;
+      a.shape([bx + nx, by + ny, (bx + tx) / 2 + nx * 0.5, (by + ty) / 2 + ny * 0.5 + 0.02, tx, ty, bx - nx, by - ny], C(TN.orange, 0.5), neon(TN.yellow, 1.2), 0.006, 0.8);
+    }
+    a.shape(circle(0, 0, 0.12, 20), C(TN.fg, 0.9), neon(TN.yellow, 2.2), 0.012);
+    a.line(arc(0.01, 0, 0.07, 0.07, 0.4, 3.6, 10), neon(TN.orange, 1.3), 0.008, false, 1, 3);
+    a.dot(0.04, 0.045, 0.05, neon(TN.fg, 3));
   }
 
-  // --- sleds (all but the box sit under the rider)
-  on(BONE.ROOT, 1, 1); // plastic saucer
-  a.shape([-0.58, 0.14, -0.52, 0.05, -0.32, 0.005, 0.32, 0.005, 0.52, 0.05, 0.58, 0.14, 0.5, 0.175, -0.5, 0.175], C(TN.red1, 0.35), neon(TN.red, 1.6), W);
-  a.line([-0.3, 0.14, 0.35, 0.14], neon(TN.fg, 1.2), 0.008);
-  on(BONE.ROOT, 1, 2); // bamboo toboggan with a curled nose
+  // --- rides (all but the box sit under the rider)
+  on(BONE.ROOT, 1, 1); // koi pool float: an inflatable kohaku carp
   {
-    const path = [-0.72, 0.04, 0.3, 0.04, ...arc(0.33, 0.2, 0.16, 0.16, -Math.PI / 2 + 0.2, Math.PI * 0.62, 8)];
-    a.shape(limb(path, 0.036), C(TN.green, 0.22), neon(TN.green, 1.4), W);
-    for (let x = -0.6; x < 0.3; x += 0.22) a.line([x, 0.012, x, 0.068], neon(TN.yellow, 1.0), 0.005);
+    const cx = -0.02, cy = 0.17, rx = 0.64, ry = 0.165, body = [];
+    for (let i = 0; i < 28; i++) { const t = (i / 28) * TAU, c = Math.cos(t); body.push(cx + rx * c, cy + ry * Math.sin(t) * (1 - 0.3 * Math.max(0, -c) ** 2)); }
+    a.shape([-0.58, 0.19, -0.9, 0.36, -0.8, 0.19, -0.9, 0.02, -0.58, 0.15], C(TN.orange, 0.4), neon(TN.orange, 1.3), W); // tail
+    a.shape(body, C(TN.fg, 0.55), neon(TN.red, 1.1), W);
+    a.fill([-0.28, 0.3, -0.05, 0.325, 0.12, 0.3, 0.08, 0.2, -0.12, 0.17, -0.3, 0.22], C(TN.red1, 0.75)); // red patches
+    a.fill([0.3, 0.28, 0.46, 0.25, 0.44, 0.19, 0.32, 0.2], C(TN.red1, 0.75));
+    a.fill([-0.5, 0.2, -0.38, 0.27, -0.36, 0.15], C(TN.red1, 0.7));
+    a.shape([0.18, 0.1, 0.02, 0.0, 0.06, 0.1], C(TN.orange, 0.45), neon(TN.orange, 1.1), 0.008); // pectoral fin
+    a.line(arc(cx, cy, rx * 0.9, ry * 0.75, 1.9, 1.15, 8), neon(TN.fg, 1.2), 0.006);            // vinyl sheen
+    a.shape(circle(0.47, 0.205, 0.035, 12), C(TN.fg, 0.9), neon(TN.fg, 1.3), 0.006).fill(circle(0.48, 0.205, 0.017, 8), C(TN.bg_dark1));
+    a.line([0.6, 0.15, 0.555, 0.135, 0.6, 0.12], neon(TN.red, 1.2), 0.006); // mouth
   }
-  on(BONE.ROOT, 1, 3); // steel runner sled
+  on(BONE.ROOT, 1, 2); // koi skateboard: kicktail deck, glowing wheels, a carp painted along the rail
   {
-    for (const x of [-0.45, -0.05, 0.3]) a.line([x, 0.03, x + 0.03, 0.2], neon(TN.blue5, 1.2), 0.008);
-    a.shape(limb([-0.64, 0.02, 0.5, 0.02, 0.63, 0.06, 0.68, 0.14, 0.62, 0.23, 0.48, 0.24], 0.016), C(TN.blue6, 0.35), neon(TN.blue6, 2.2), 0.007);
-    a.shape(rrect(-0.6, 0.19, 0.48, 0.27, 0.025), C(TN.orange, 0.2), neon(TN.orange, 1.1), W);
+    for (const x of [-0.38, 0.38]) {
+      a.fill([x - 0.07, 0.092, x + 0.07, 0.092, x + 0.035, 0.055, x - 0.035, 0.055], C(TN.blue7, 0.9));
+      a.dot(x, 0.045, 0.1, neon(TN.cyan, 0.8), 1, 3);
+      a.shape(circle(x, 0.045, 0.045, 12), C(TN.cyan, 0.3), neon(TN.cyan, 1.9), 0.008).dot(x, 0.045, 0.02, neon(TN.fg, 2));
+    }
+    a.shape(limb([-0.7, 0.19, -0.57, 0.11, 0.57, 0.11, 0.7, 0.19], 0.02), C(TN.bg_dark1), neon(TN.orange, 1.5), 0.009);
+    for (let i = 0; i < 9; i++) { const x0 = -0.5 + i * 0.115; a.fill([x0, 0.1, x0 + 0.07, 0.1, x0 + 0.08, 0.118, x0 + 0.01, 0.118], i % 3 === 1 ? C(TN.fg, 0.75) : C(TN.red1, 0.85)); }
+    a.line([0.42, 0.108, 0.47, 0.098, 0.52, 0.108], neon(TN.yellow, 1.2), 0.005);
   }
-  on(BONE.ROOT, 1, 4); // carbon luge
-  a.line([-0.6, 0.012, 0.55, 0.012, 0.7, 0.07], neon(TN.blue6, 2.2), 0.009);
-  a.shape([-0.73, 0.06, 0.5, 0.045, 0.8, 0.1, 0.52, 0.2, -0.55, 0.22, -0.75, 0.14], C(TN.bg_dark1), neon(TN.blue, 1.8), W);
-  a.line([-0.62, 0.13, 0.62, 0.115], neon(TN.magenta, 2.2), 0.01);
-  on(BONE.ROOT, 1, 5); // maglev board: hover field + emitter strip
-  a.glow([-0.5, 0.19, 0.5, 0.19, 0.64, 0.0, -0.5, 0.19, 0.64, 0.0, -0.64, 0.0],
-    [neon(TN.cyan, 0.3), neon(TN.cyan, 0.3), C(0), neon(TN.cyan, 0.3), C(0), C(0)], 1, 3);
-  a.shape([-0.66, 0.2, 0.55, 0.2, 0.74, 0.25, 0.55, 0.3, -0.62, 0.3, -0.7, 0.25], C(TN.bg_dark1), neon(TN.magenta, 2), W);
-  a.line([-0.5, 0.19, 0.5, 0.19], neon(TN.cyan, 2.2), 0.012).line([0.1, 0.25, 0.2, 0.25, 0.3, 0.25], neon(TN.magenta2, 2.5), 0.01, false, 1, 2);
+  on(BONE.ROOT, 1, 3); // seigaiha luge: overlapping wave arcs (fish scales, if you look again) on a lacquered pod
+  {
+    a.line([-0.62, 0.012, 0.56, 0.012, 0.71, 0.06], neon(TN.blue6, 2.2), 0.009);
+    for (const x of [-0.45, 0.35]) a.line([x, 0.015, x + 0.03, 0.08], neon(TN.blue5, 1.1), 0.008);
+    a.shape([-0.72, 0.08, 0.5, 0.07, 0.74, 0.11, 0.62, 0.2, -0.6, 0.245, -0.76, 0.17], C(TN.blue7, 0.95), neon(TN.blue, 1.8), W);
+    for (let row = 0; row < 3; row++) for (let i = 0; i < 9; i++) {
+      const x = -0.52 + i * 0.12 + (row % 2) * 0.06, y = 0.085 + row * 0.04;
+      if (x > 0.36 - row * 0.05) continue;
+      for (const r of [0.05, 0.03]) a.line(arc(x, y, r, r * 0.8, 0.15, Math.PI - 0.15, 6), r > 0.04 ? neon(TN.cyan, 0.9) : neon(TN.blue, 0.8), 0.004);
+    }
+    a.line([-0.64, 0.22, 0.6, 0.19], neon(TN.magenta, 2), 0.009);
+  }
+  on(BONE.ROOT, 1, 4); // bullet nose: a retired Shinkansen nose cone, white with the blue line
+  {
+    const top = [];
+    for (let i = 14; i >= 0; i--) { const u = i / 14; top.push(0.05 + u * 0.97, 0.075 + 0.285 * (1 - u) ** 1.7); }
+    a.shape([-0.74, 0.03, 0.94, 0.035, ...top, -0.74, 0.36], C(TN.fg, 0.7), neon(TN.fg, 1.3), W);
+    a.fill([-0.74, 0.1, 0.8, 0.075, 0.9, 0.06, 0.8, 0.093, -0.74, 0.135], C(TN.blue0, 0.95));
+    a.line([-0.74, 0.155, 0.62, 0.13], neon(TN.blue, 1.1), 0.005);
+    a.shape([0.1, 0.31, 0.36, 0.2, 0.4, 0.18, 0.15, 0.27], C(TN.bg_dark1), neon(TN.cyan, 1.2), 0.006); // windscreen
+    a.dot(0.95, 0.07, 0.12, neon(TN.yellow, 1.2)).dot(0.95, 0.07, 0.03, neon(TN.fg, 3));            // headlight
+    a.line([-0.3, 0.05, -0.3, 0.34], C(TN.fg_gutter), 0.004).line([0.02, 0.05, 0.02, 0.34], C(TN.fg_gutter), 0.004);
+  }
+  on(BONE.ROOT, 1, 5); // storm cloud: curled like the clouds dragons ride in old paintings, lit from inside
+  {
+    const mist = neon(TN.magenta, 0.25);
+    a.glow([-0.5, 0.12, 0.5, 0.12, 0.62, -0.02, -0.5, 0.12, 0.62, -0.02, -0.62, -0.02], [mist, mist, C(0), mist, C(0), C(0)], 1, 3);
+    const puffs = [[-0.52, 0.17, 0.12], [-0.3, 0.24, 0.16], [-0.02, 0.26, 0.18], [0.27, 0.23, 0.15], [0.5, 0.17, 0.11]], fog = C(TN.storm, 1.25);
+    a.fill(arc(0, 0.13, 0.64, 0.1, 0, TAU * 0.97, 20), fog);
+    for (const [x, y, r] of puffs) a.fill(circle(x, y, r, 16), fog);
+    for (const [x, y, r] of puffs) a.line(arc(x, y, r, r, 0.25, Math.PI - 0.25, 8), neon(TN.blue5, 1.3), 0.009);
+    a.line(arc(0, 0.13, 0.64, 0.1, Math.PI + 0.3, TAU - 0.3, 12), neon(TN.magenta, 0.9), 0.007);
+    for (const [x, y, r] of [[-0.3, 0.22, 0.09], [0.12, 0.2, 0.08]]) { // ruyi curls
+      const sp = [];
+      for (let i = 0; i <= 16; i++) { const t = (i / 16) * TAU * 1.3, rr = r * (1 - i / 19); sp.push(x + Math.cos(t + 1) * rr, y + Math.sin(t + 1) * rr * 0.8); }
+      a.line(sp, neon(TN.magenta, 1.3), 0.006, false, 1, 3);
+    }
+    a.line([0.3, 0.26, 0.25, 0.17, 0.31, 0.16, 0.26, 0.06], neon(TN.yellow, 2.4), 0.007, false, 1, 1); // lightning inside
+  }
 
-  // --- body: legs, torso, head, (wingsuit), arm
+  // --- body: legs, (hoodie spikes), torso, (holo scales), head, (fin suit), arm; tiers of group 0 = outfit stages
   on(BONE.LEGS);
   a.shape(limb([0.0, 0.03, 0.2, 0.12, 0.37, 0.15, 0.47, 0.08, 0.55, 0.01], 0.085, 0.06), C(TN.blue0, 0.75), neon(TN.blue, 0.85), W);
   a.shape(rrect(0.49, -0.055, 0.74, 0.07, 0.045), C(TN.fg, 0.55), neon(TN.fg, 0.9), W).line([0.5, -0.05, 0.72, -0.05], neon(TN.cyan, 1.4), 0.008);
+  on(BONE.LEGS, 0, 6); // toe claws
+  for (const [y, len] of [[0.045, 0.06], [0.0, 0.07], [-0.04, 0.055]]) a.shape([0.735, y + 0.015, 0.735 + len, y - 0.01, 0.735, y - 0.012], C(TN.fg, 0.85), neon(TN.fg, 1.3), 0.005);
+  on(BONE.TORSO, 0, 4); // dino-hoodie spikes down the back (dorsal fins)
+  for (const [x, y, tx, ty, h] of [[-0.16, 0.14, 0, 1, 0.08], [-0.158, 0.26, 0, 1, 0.09], [-0.145, 0.38, 0.25, 1, 0.085], [-0.085, 0.495, 0.73, 0.68, 0.07]]) {
+    const l = Math.hypot(tx, ty), ux = (tx / l) * 0.045, uy = (ty / l) * 0.045, nx = -ty / l, ny = tx / l;
+    a.shape([x - ux, y - uy, x + nx * h + ux * 0.6, y + ny * h + uy * 0.6, x + ux, y + uy], pink, pinkL, 0.009);
+  }
   on(BONE.TORSO);
   a.shape([-0.12, -0.01, -0.16, 0.14, -0.155, 0.32, -0.115, 0.46, -0.04, 0.53, 0.06, 0.53, 0.135, 0.46, 0.165, 0.3, 0.155, 0.12, 0.1, 0.0], jacket, jacketL, W);
   a.line([-0.15, 0.3, 0.162, 0.31], neon(TN.cyan, 1.2), 0.012).line([0.145, 0.43, 0.15, 0.06], neon(TN.magenta, 0.5), 0.005);
+  on(BONE.TORSO, 0, 3); // holo jacket: iridescent arcs (scales)
+  for (const y of [0.07, 0.14, 0.21, 0.37, 0.43]) for (let i = 0; i < 3; i++) {
+    const odd = Math.round(y * 100) % 2, x = -0.085 + i * 0.075 + (odd ? 0.037 : 0);
+    if (x > 0.12) continue;
+    a.line(arc(x, y, 0.036, 0.03, 0.2, Math.PI - 0.2, 6), odd ? neon(TN.cyan, 0.75) : neon(TN.magenta, 0.8), 0.0045, false, 1, 3);
+  }
+  on(BONE.TORSO);
   a.shape(rrect(-0.08, 0.455, 0.115, 0.565, 0.045), pink, pinkL, W);
+  on(BONE.HEAD, 0, 4); // the spikes carry on up the back of the beanie
+  for (const t of [2.5, 2.95]) {
+    const P = (ang, rr) => [hc[0] + Math.cos(ang) * rr, hc[1] + Math.sin(ang) * rr];
+    a.shape([...P(t - 0.2, br * 0.95), ...P(t - 0.1, br + 0.08), ...P(t + 0.2, br * 0.95)], pink, pinkL, 0.009);
+  }
+  on(BONE.HEAD, 0, 1); ear(a, hc, br, 1.62, 0.07, C(TN.magenta2, 0.4), neon(TN.magenta2, 0.55)); // far "cat ear"
   on(BONE.HEAD);
   {
-    const hc = [0.035, 0.165], br = 0.15;
     a.shape(circle(hc[0], hc[1], 0.135, 22), C(TN.blue7, 0.9), neon(TN.fg, 0.85), W);
     const bean = arc(hc[0], hc[1], br, br, -0.12, Math.PI + 0.3, 14);
     a.shape(circle(hc[0] - 0.075, hc[1] + 0.16, 0.055, 10), C(TN.fg, 0.85), neon(TN.fg, 1.0), 0.008);
@@ -358,43 +484,57 @@ function buildArt() {
     a.shape(rrect(0.07, 0.12, 0.21, 0.205, 0.035), neon(TN.cyan, 0.95), neon(TN.blue6, 0.8), 0.01);
     a.line([0.1, 0.19, 0.16, 0.135], neon(TN.fg, 2), 0.006);
   }
-  on(BONE.GLIDER, 2, 4); // wingsuit: swept membrane from the raised arm back down to the hip (torso space)
+  on(BONE.HEAD, 0, 1); ear(a, hc, br, 1.2, 0.085, pink, pinkL); // near "cat ear"
+  on(BONE.HEAD, 0, 2); // earbuds (their cables, the whiskers, are streamers)
+  a.shape(circle(CHEEK[0], CHEEK[1], 0.024, 10), C(TN.fg, 0.85), neon(TN.fg, 1.4), 0.006);
+  on(BONE.HEAD, 0, 5); // the goggles start looking back: a warm dragon's eye with a slit pupil
+  a.shape(rrect(0.07, 0.12, 0.21, 0.205, 0.035), neon(TN.yellow, 1.05), neon(TN.orange, 1.3), 0.01);
+  a.fill(arc(0.155, 0.1625, 0.013, 0.036, 0, TAU * 0.94, 10), C(TN.bg_dark1)).dot(0.125, 0.185, 0.02, neon(TN.fg, 2.5));
+  on(BONE.GLIDER, 2, 4); // fin suit: a koi-fin membrane from the raised arm back down to the hip (torso space)
   {
-    const lead = [0.02, 0.46, -0.3, 0.69, -0.82, 0.62], trail = [-0.68, 0.46, -0.62, 0.28, -0.46, 0.14, -0.36, 0.0, -0.14, -0.02];
-    a.shape([...lead, ...trail, -0.16, 0.3], C(TN.purple, 0.45), neon(TN.magenta, 0.9), W, 0.85);
-    a.line(lead, neon(TN.magenta2, 0.9), 0.016).line([-0.82, 0.62, ...trail], neon(TN.cyan, 0.9), 0.01);
-    for (let i = 0; i < 3; i++) a.line([-0.1 - i * 0.12, 0.52 + i * 0.05, -0.44 - i * 0.1, 0.06 + i * 0.14], neon(TN.purple, 0.7), 0.006);
-    for (const [x, y] of [[-0.82, 0.62], [-0.62, 0.28], [-0.36, 0.0]]) a.dot(x, y, 0.05, neon(TN.cyan, 2));
+    const lead = [0.02, 0.46, -0.3, 0.69, -0.82, 0.62], root = [-0.14, -0.02];
+    const tips = [[-0.82, 0.62], [-0.72, 0.4], [-0.6, 0.2], [-0.4, 0.04]], edge = [];
+    tips.forEach(([x, y], i) => { edge.push(x, y); const n = tips[i + 1] ?? root; edge.push((x + n[0]) / 2 + 0.07, (y + n[1]) / 2 + 0.05); }); // scalloped trailing edge
+    a.shape([...lead, ...edge.slice(2), ...root, -0.16, 0.3], C(TN.magenta2, 0.3), neon(TN.orange, 0.9), W, 0.78);
+    a.line(lead, neon(TN.orange, 1.2), 0.016);
+    for (const [x, y] of tips) a.line([-0.12, 0.4, x, y], neon(TN.yellow, 0.75), 0.005);
+    a.line([...tips[0], ...edge.slice(2), ...root], neon(TN.magenta2, 1.0), 0.009);
+    for (const [x, y] of tips) a.dot(x, y, 0.05, neon(TN.orange, 1.8));
   }
   on(BONE.ARM);
   a.shape(limb([0, 0, 0.08, -0.09, 0.16, -0.15, 0.25, -0.18, 0.33, -0.19], 0.066, 0.05), jacket, jacketL, W);
   a.shape(circle(0.35, -0.19, 0.058, 12), pink, pinkL, W);
   a.line([0.27, -0.14, 0.28, -0.24], neon(TN.cyan, 1.6), 0.008);
+  on(BONE.ARM, 0, 6); // three-fingered gloves (claws)
+  for (const [t, len] of [[0.35, 0.075], [-0.35, 0.08], [-1.05, 0.07]]) {
+    const bx = HAND[0] + Math.cos(t) * 0.05, by = HAND[1] + Math.sin(t) * 0.05, nx = -Math.sin(t) * 0.017, ny = Math.cos(t) * 0.017;
+    a.shape([bx + nx, by + ny, HAND[0] + Math.cos(t - 0.35) * (0.05 + len), HAND[1] + Math.sin(t - 0.35) * (0.05 + len), bx - nx, by - ny], C(TN.fg, 0.85), neon(TN.fg, 1.3), 0.006);
+  }
 
-  // --- in front: cardboard box sled, near dragon wing
+  // --- in front: cardboard box
   on(BONE.ROOT, 1, 0);
   a.shape([-0.44, 0.44, -0.66, 0.6, -0.7, 0.55, -0.48, 0.42], C(TN.orange, 0.3), neon(TN.yellow, 0.6), W);
   a.shape([0.4, 0.44, 0.62, 0.56, 0.58, 0.61, 0.38, 0.46], C(TN.orange, 0.3), neon(TN.yellow, 0.6), W);
   a.shape([-0.48, 0.02, 0.42, 0.02, 0.44, 0.45, -0.5, 0.45], C(TN.orange, 0.36), neon(TN.yellow, 0.7), W);
   a.fill([-0.48, 0.2, 0.43, 0.2, 0.43, 0.27, -0.48, 0.27], C(TN.yellow, 0.55));
   a.line([0.1, 0.33, 0.14, 0.4, 0.18, 0.33], neon(TN.fg, 0.9), 0.006).line([0.14, 0.4, 0.14, 0.31], neon(TN.fg, 0.9), 0.006);
-  on(BONE.GLIDER, 2, 5); dragonWing(a, 1, false);
   return a;
 }
 
-function dragonWing(a, k, far) { // bat-like wing trailing back from the shoulder blades
-  const R = pts => xf(pts, far ? 0.18 : 0, far ? 0.05 : 0, far ? 0.04 : 0, far ? 0.9 : 1);
-  const w = [-0.38, 0.62], tips = [[-1.6, 0.78], [-1.5, 0.28], [-1.1, -0.08], [-0.6, -0.2]];
-  const mem = [0, 0, ...w];
-  tips.forEach(([x, y], i) => {
-    mem.push(x, y);
-    const n = tips[i + 1] ?? [0, -0.05];
-    mem.push((x + n[0]) / 2 + 0.1, (y + n[1]) / 2 + 0.07);
-  });
-  a.shape(R(mem), C(TN.teal, 0.14 * k), neon(TN.green1, 2.3 * k), 0.012, 0.85);
-  for (const [x, y] of tips) a.line(R([...w, x, y]), neon(TN.blue6, 1.4 * k), 0.007);
-  a.line(R([0, 0, ...w, -0.3, 0.72]), neon(TN.green1, 1.8 * k), 0.012);
+// follow-the-leader chain from an anchor, streaming along (dx, dy) with a flutter travelling down it
+function trail(P, n, x0, y0, dx, dy, seg, amp, freq, ph, t, kf) {
+  P[0] = x0; P[1] = y0;
+  for (let i = 1; i < n; i++) {
+    const o = i * 4, fl = Math.sin(t * freq - i * 0.9 + ph) * amp * (i / n);
+    const tx = P[o - 4] + dx * seg - dy * fl, ty = P[o - 3] + dy * seg + dx * fl;
+    P[o] += (tx - P[o]) * kf; P[o + 1] += (ty - P[o + 1]) * kf;
+    const ex = P[o] - P[o - 4], ey = P[o + 1] - P[o - 3], el = Math.hypot(ex, ey) || 1;
+    P[o] = P[o - 4] + (ex / el) * seg; P[o + 1] = P[o - 3] + (ey / el) * seg;
+  }
 }
+const lay = (P, n, x0, y0, dx, dy, seg) => { for (let i = 0; i < n; i++) { P[i * 4] = x0 + dx * seg * i; P[i * 4 + 1] = y0 + dy * seg * i; } };
+const koiW = u => (u < 0.3 ? 0.15 + 0.2 * u : u < 0.8 ? 0.21 - 0.22 * (u - 0.3) : 0.1 + 0.5 * (u - 0.8)); // carp half-width profile
+const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
 
 // ------------------------------------------------------------------ rider object
 
@@ -413,7 +553,8 @@ void main() {
 export function createRider() {
   const bones = Array.from({ length: NB }, () => new THREE.Matrix3());
   const sel = new THREE.Vector4(0, 0, -1, 0);
-  const body = new THREE.Mesh(buildArt().geometry(), vecMaterial({ bones, sel, depthTest: false })), uSoft = body.material.uniforms.uSoft;
+  const body = new THREE.Mesh(buildArt().geometry(), vecMaterial({ bones, sel, depthTest: false }));
+  const { uSoft, uAlpha } = body.material.uniforms;
   body.frustumCulled = false; body.renderOrder = 17;
 
   const flameU = { uTime: U.uTime, uOn: { value: 0 }, uDia: { value: 0 }, uC0: { value: new THREE.Color() }, uC1: { value: new THREE.Color() }, uC2: { value: new THREE.Color() } };
@@ -427,9 +568,15 @@ export function createRider() {
   group.matrixAutoUpdate = false;
   group.add(body, flame);
 
-  const SN = 12, scarf = new Ribbon(SN, ribbonMaterial(neon(TN.magenta2, 0.55), neon(TN.magenta2, 0.4), 0.62, 1, 0), 0.05);
-  scarf.mesh.renderOrder = 16;
-  const SP = scarf.pts;
+  // streamers, in world space: the scarf (a tail, all along), two earbud cables (whiskers), the koinobori carp
+  const SN = 36, scarf = new Ribbon(SN, scarfMaterial(neon(TN.magenta2, 0.55), neon(TN.magenta2, 0.4)), 0.05);
+  const WN = 10, whiskers = [0, 1].map(() => new Ribbon(WN, ribbonMaterial(neon(TN.fg, 0.9), neon(TN.magenta, 1.1), 0.3, 0, 1), 0.06));
+  const KN = 12, koi = new Ribbon(KN, koiMaterial(), 0.04);
+  scarf.mesh.renderOrder = koi.mesh.renderOrder = 16;
+  for (const w of whiskers) w.mesh.renderOrder = 16; // behind the head: they read as cables running back from the earbuds
+  const streamers = new THREE.Group();
+  streamers.add(scarf.mesh, koi.mesh, ...whiskers.map(w => w.mesh));
+  const scarfU = scarf.mesh.material.uniforms, SC1 = [neon(TN.magenta2, 0.4), neon(TN.magenta, 0.5)];
 
   const tmp = new THREE.Matrix3(), open = new THREE.Matrix3(), stow = new THREE.Matrix3(), v3 = new THREE.Vector3();
   const aff = (m, tx, ty, ang, sx = 1, sy = sx) => {
@@ -441,19 +588,38 @@ export function createRider() {
   const damp = (a, b, k, dt) => a + (b - a) * (1 - Math.exp(-k * dt));
 
   const st = { sled: 0, glider: 0, booster: 0, open: 0, tumble: 0, spin: 0, squash: 0, flame: 0, crashed: false,
-    torso: 0.12, head: 0, arm: 0, legs: 0, scarfInit: false };
-  const world = { x: 0, y: 0, nozzleA: 0, flame: 0, tier: 0, spark: null }; // booster nozzle in world space, for sparks
+    torso: 0.12, head: 0, arm: 0, legs: 0, init: false };
+  const look = { p: 0, stage: 0, dragon: false, n: 12 }; // outfit progress (items.js), dragon form, scarf length
+  const world = { x: 0, y: 0, nozzleA: 0, flame: 0, tier: 0, spark: null, hx: 0, hy: 0 }; // booster nozzle + dragon snout, world space
   const W2 = { a: 0, b: 0, c: 0, d: 0, tx: 0, ty: 0 }; // current rider-local → world affine
+  const P0 = [0, 0], P1 = [0, 0];
+  const at = (m, x, y, out) => { // bone-space point → world
+    v3.set(x, y, 1).applyMatrix3(m);
+    out[0] = W2.a * v3.x + W2.c * v3.y + W2.tx; out[1] = W2.b * v3.x + W2.d * v3.y + W2.ty;
+    return out;
+  };
 
-  function setLoadout(l) {
-    st.sled = l.sled | 0; st.glider = l.glider | 0; st.booster = l.booster | 0;
-    sel.set(0, st.sled, st.glider ? st.glider : -1, st.booster);
-    const f = FL[st.booster];
+  function apply() {
+    const pearl = look.dragon && st.booster ? 4 : st.booster; // a dragon always chases the pearl, whatever drives it
+    if (look.dragon) sel.set(-1, -1, -1, st.booster ? 4 : -1);
+    else sel.set(look.stage, st.sled, st.glider ? st.glider : -1, st.booster);
+    const f = FL[pearl];
     if (f) { flameU.uC0.value.copy(f.c[0]); flameU.uC1.value.copy(f.c[1]); flameU.uC2.value.copy(f.c[2]); flameU.uDia.value = f.dia; }
-    world.tier = st.booster;
+    world.tier = pearl;
+    scarf.mesh.visible = !look.dragon;
+    for (const w of whiskers) w.mesh.visible = !look.dragon && look.stage >= 2;
+    koi.mesh.visible = !look.dragon && st.glider === 2;
+  }
+  function setLoadout(l) { st.sled = l.sled | 0; st.glider = l.glider | 0; st.booster = l.booster | 0; st.init = false; apply(); }
+  function setLook(l) {
+    look.p = l.p ?? look.p; look.dragon = !!l.dragon; look.stage = stage(look.p);
+    look.n = Math.round(12 + 24 * look.p); // the scarf lengthens with every purchase
+    scarfU.uFin.value = smooth(FINS - 0.02, FINS + 0.02, look.p);
+    scarfU.uC1.value.lerpColors(SC1[0], SC1[1], smooth(0.4, 1, look.p));
+    st.init = false; apply();
   }
 
-  function reset() { st.tumble = st.spin = st.squash = st.open = st.flame = 0; st.crashed = false; st.scarfInit = false; }
+  function reset() { st.tumble = st.spin = st.squash = st.open = st.flame = 0; st.crashed = false; st.init = false; }
   const kick = (v) => { st.squash = v; }; // + stretch, − squash
   function crash(speed) { st.spin = (Math.random() < 0.5 ? -1 : 1) * Math.min(14, 4 + speed * 0.35); }
 
@@ -470,9 +636,9 @@ export function createRider() {
     // --- pose targets
     const tuck = r.tuck && !air, glide = st.open > 0.5 && g;
     const steep = air ? 0 : Math.max(0, -r.a); // seated on a steep drop: lean back against it
-    let torso = 0.12 + 0.5 * steep + 0.025 * Math.sin(t * 1.7), head = -0.06 - 0.3 * steep, arm = 0.02 + 0.03 * Math.sin(t * 1.7 + 1), legs = 0;
-    if (tuck) { torso = -0.62; head = 0.42; arm = 0.42; legs = 0.12; }
-    else if (glide) { torso = 0.02; head = 0.05; arm = g.arm; }
+    let torso = 0.12 + 0.5 * steep + 0.025 * Math.sin(t * 1.7), head = -0.06 - 0.3 * steep, arm = 0.02 + 0.03 * Math.sin(t * 1.7 + 1), legs = LEGA[st.sled];
+    if (tuck) { torso = -0.62; head = 0.42; arm = 0.42; legs += 0.12; }
+    else if (glide) { torso = g.torso ?? 0.02; head = g.head ?? 0.05; arm = g.arm; }
     else if (air) { torso = 0.02; head = 0; arm = 0.95 + 0.1 * Math.sin(t * 7); }
     if (r.crashed && (sp > 1.5 || air)) { torso = 0.3 * Math.sin(t * 8); arm = 1 + 1.1 * Math.sin(t * 11); head = 0.3 * Math.sin(t * 9); legs = 0.2 * Math.sin(t * 10); }
     else if (r.crashed) { torso = -0.3; head = 0.3; arm = -0.2; }
@@ -489,8 +655,11 @@ export function createRider() {
     chain(bones[BONE.TORSO], root, HIP_X, seat, st.torso);
     chain(bones[BONE.HEAD], bones[BONE.TORSO], NECK[0], NECK[1], st.head - st.torso * 0.3);
     chain(bones[BONE.ARM], bones[BONE.TORSO], SHOULDER[0], SHOULDER[1], st.arm);
-    const m = MOUNT[st.sled], jit = r.boosting ? 0.012 * Math.sin(t * 90) : 0;
-    chain(bones[BONE.BOOST], root, m[0], m[1] + jit, 0);
+    const jit = r.boosting ? 0.012 * Math.sin(t * 90) : 0;
+    if (world.tier === 4) { // the pearl floats ahead, bobbing
+      const [px, py] = PEARL[look.dragon ? 1 : 0];
+      chain(bones[BONE.BOOST], root, px + 0.04 * Math.sin(t * 1.3), py + 0.06 * Math.sin(t * 2.1) + jit, 0.1 * Math.sin(t * 1.7));
+    } else { const m = MOUNT[st.sled]; chain(bones[BONE.BOOST], root, m[0], m[1] + jit, 0); }
     if (g) {
       const o = st.open, e = o < 1 ? 1 + 2.2 * (o - 1) ** 3 + 1.2 * (o - 1) ** 2 : 1; // easeOutBack
       const w = g.stow;
@@ -499,13 +668,10 @@ export function createRider() {
         const ca = Math.cos(st.arm), sa = Math.sin(st.arm);
         const hx = SHOULDER[0] + HAND[0] * ca - HAND[1] * sa, hy = SHOULDER[1] + HAND[0] * sa + HAND[1] * ca;
         chain(open, bones[BONE.TORSO], hx, hy, g.a + (st.glider === 1 ? 0.06 * Math.sin(t * 5) : 0), 1);
-      } else {
-        const flap = st.glider === 5 ? 0.16 * Math.sin(t * (sp > 30 ? 3 : 5)) : 0;
-        chain(open, bones[BONE.TORSO], g.at[0], g.at[1], g.a + flap, 1);
-      }
+      } else chain(open, bones[BONE.TORSO], g.at[0], g.at[1], g.a, 1);
       const gb = bones[BONE.GLIDER].elements, E0 = stow.elements, E1 = open.elements;
       for (let i = 0; i < 9; i++) gb[i] = E0[i] + (E1[i] - E0[i]) * e;
-      sel.z = st.glider === 4 && o < 0.02 ? -1 : st.glider;
+      if (!look.dragon) sel.z = st.glider === 4 && o < 0.02 ? -1 : st.glider;
     }
 
     // --- group transform: T(x,y) R(a) S(s), tumbling about the body centre (0, pc)
@@ -514,9 +680,10 @@ export function createRider() {
     W2.a = W2.d = ca; W2.b = sa; W2.c = -sa; W2.tx = tx; W2.ty = ty;
     group.matrix.set(ca, -sa, 0, tx, sa, ca, 0, ty, 0, 0, s, 0, 0, 0, 0, 1);
     group.matrixWorldNeedsUpdate = true;
+    world.hx = W2.a * SNOUT[0] + W2.c * SNOUT[1] + W2.tx; world.hy = W2.b * SNOUT[0] + W2.d * SNOUT[1] + W2.ty;
 
     // --- booster flame
-    const f = FL[st.booster];
+    const f = FL[world.tier];
     st.flame = damp(st.flame, r.boosting && f ? 1 : 0, r.boosting ? 30 : 14, dt);
     flame.visible = st.flame > 0.01;
     if (f) {
@@ -530,26 +697,46 @@ export function createRider() {
       world.nozzleA = al + Math.PI; world.flame = st.flame; world.spark = f.spark;
     } else world.flame = 0;
 
-    // --- scarf: follow-the-leader chain streaming against the airflow
-    v3.set(0.0, 0.5, 1).applyMatrix3(bones[BONE.TORSO]);
-    const nx = W2.a * v3.x + W2.c * v3.y + W2.tx, ny = W2.b * v3.x + W2.d * v3.y + W2.ty;
-    const seg = 0.075 * s, wk = Math.min(1, sp / 6);
-    let dx = -r.vx / (sp || 1) * wk + 0.35 * (1 - wk) * -Math.cos(al), dy = -r.vy / (sp || 1) * wk - (1 - wk);
-    const dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
-    if (!st.scarfInit) { for (let i = 0; i < SN; i++) { SP[i * 4] = nx + dx * seg * i; SP[i * 4 + 1] = ny + dy * seg * i; } st.scarfInit = true; }
-    SP[0] = nx; SP[1] = ny;
-    const amp = seg * (0.25 + Math.min(1.2, sp / 20)), kf = 1 - Math.exp(-dt * 30);
-    for (let i = 1; i < SN; i++) {
-      const o = i * 4, fl = Math.sin(t * (9 + sp * 0.35) - i * 0.9) * amp * (i / SN);
-      const txp = SP[o - 4] + dx * seg - dy * fl, typ = SP[o - 3] + dy * seg + dx * fl;
-      SP[o] += (txp - SP[o]) * kf; SP[o + 1] += (typ - SP[o + 1]) * kf;
-      const ex = SP[o] - SP[o - 4], ey = SP[o + 1] - SP[o - 3], el = Math.hypot(ex, ey) || 1;
-      SP[o] = SP[o - 4] + (ex / el) * seg; SP[o + 1] = SP[o - 3] + (ey / el) * seg;
-      SP[o + 2] = s * (0.055 - 0.03 * (i / SN)); SP[o + 3] = i / (SN - 1);
+    if (look.dragon) return;
+    // --- streamers stream against the airflow; when slow the cables and the carp hang down and back, while the
+    // scarf (a tail, really) comes to rest trailing back along the body
+    const wk = Math.min(1, sp / 6), ux = -r.vx / (sp || 1) * wk, uy = -r.vy / (sp || 1) * wk;
+    let dx = ux + 0.35 * (1 - wk) * -Math.cos(al), dy = uy - (1 - wk);
+    let lx = ux - (1 - wk) * Math.cos(al), ly = uy - (1 - wk) * (Math.sin(al) + 0.3);
+    let dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+    dl = Math.hypot(lx, ly) || 1; lx /= dl; ly /= dl;
+    const kf = 1 - Math.exp(-dt * 30), fq = 9 + sp * 0.35;
+    // scarf
+    const SP = scarf.pts, n = look.n, seg = 0.075 * s, fin = scarfU.uFin.value, w0 = s * (0.055 + 0.025 * look.p) * (1 + 0.9 * fin);
+    at(bones[BONE.TORSO], 0.0, 0.5, P0);
+    if (!st.init) lay(SP, n, P0[0], P0[1], lx, ly, seg);
+    trail(SP, n, P0[0], P0[1], lx, ly, seg, seg * (0.25 + Math.min(1.2, sp / 20)), fq, 0, t, kf);
+    for (let i = 0; i < n; i++) { SP[i * 4 + 2] = w0 * (1 - 0.55 * (i / (n - 1))); SP[i * 4 + 3] = i / (n - 1); }
+    scarf.commit(n);
+    // earbud cables, which are whiskers
+    if (look.stage >= 2) {
+      const ws = s * (0.075 + 0.05 * smooth(0.34, 1, look.p)), wy = dy - 0.25, wl = Math.hypot(dx, wy); // a slight droop
+      whiskers.forEach((wr, j) => {
+        at(bones[BONE.HEAD], CHEEK[0] - 0.03 * j, CHEEK[1] + 0.02 * j, P1);
+        if (!st.init) lay(wr.pts, WN, P1[0], P1[1], dx / wl, wy / wl, ws);
+        trail(wr.pts, WN, P1[0], P1[1], dx / wl, wy / wl, ws, ws * (0.5 + Math.min(1.5, sp / 15)), 7 + sp * 0.3, 2.1 * j, t, kf);
+        for (let i = 0; i < WN; i++) { wr.pts[i * 4 + 2] = s * 0.014 * (1 - 0.6 * (i / (WN - 1))); wr.pts[i * 4 + 3] = i / (WN - 1); }
+        wr.commit();
+      });
     }
-    SP[2] = s * 0.055; SP[3] = 0;
-    scarf.commit();
+    // the carp on its pole: puffs up in the wind when the pole is raised
+    if (st.glider === 2) {
+      const o = st.open, ks = s * 0.125 * (0.5 + 0.5 * o);
+      at(bones[BONE.GLIDER], POLE[0], POLE[1], P1);
+      if (!st.init) lay(koi.pts, KN, P1[0], P1[1], dx, dy, ks);
+      trail(koi.pts, KN, P1[0], P1[1], dx, dy, ks, ks * (0.2 + Math.min(0.8, sp / 25)), 6 + sp * 0.25, 1, t, kf);
+      for (let i = 0; i < KN; i++) { const u = i / (KN - 1); koi.pts[i * 4 + 2] = s * koiW(u) * (0.55 + 0.45 * o); koi.pts[i * 4 + 3] = u; }
+      koi.commit();
+    }
+    st.init = true;
   }
 
-  return { group, scarf: scarf.mesh, setLoadout, update, reset, kick, crash, world, get sled() { return st.sled; } };
+  const fade = k => { uAlpha.value = k; streamers.visible = k > 0.5; };
+  return { group, streamers, setLoadout, setLook, update, reset, kick, crash, fade, world,
+    get sled() { return st.sled; }, get dragon() { return look.dragon; } };
 }

@@ -3,7 +3,7 @@
 //      node test/sim.mjs progress   (also simulates a whole playthrough)
 import assert from 'node:assert/strict';
 import { makeTerrain, newRider, step, DT, G, wrap } from '../src/physics.js';
-import { TRACKS, loadoutStats, newSave, nextTier, buy, payout, GOAL } from '../src/items.js';
+import { TRACKS, loadoutStats, newSave, nextTier, buy, payout, GOAL, progress, stage, weather, DRIFT, FINS } from '../src/items.js';
 
 const T = makeTerrain();
 
@@ -55,6 +55,37 @@ for (const gl of [1, 2, 3, 4, 5]) {
   for (let i = 0; i < 36; i++) step(r, inp, st, T, ev);
   assert.ok(ev.some(e => e.type === 'pop' && e.late), 'late pop did not fire');
   assert.ok(Math.abs(r.a - a0) < 1e-3, `late-pop tap pitched the nose by ${((r.a - a0) * 180 / Math.PI).toFixed(1)}°`);
+}
+
+// --- economy: a first run with no input at all pays for the cheapest first item within 2 runs
+{
+  const st = loadoutStats(newSave().levels), r = newRider(T, st);
+  while (!r.done && !(r.jump != null && r.t - r.landT > 2.2)) step(r, {}, st, T, []);
+  const pay = payout({ ...r, dist: r.jump ?? 0, lanterns: 0, rings: 0 }, 1, 0).total;
+  const cheapest = Math.min(...TRACKS.map(t => t.tiers[1].price));
+  assert.ok(2 * pay >= cheapest, `a no-input first run pays ¥${pay}: the first item (¥${cheapest}) takes more than 2 runs`);
+}
+
+// --- the koi → dragon drift: 0 at the start, 1 fully upgraded, every purchase moves it on, stages and weather follow
+{
+  const s = newSave();
+  assert.equal(progress(s.levels), 0);
+  assert.equal(stage(0), 0);
+  assert.ok(DRIFT.every(([at], i) => i === 0 || at > DRIFT[i - 1][0]) && DRIFT.at(-1)[0] < FINS, 'drift thresholds must ascend below FINS');
+  let p = 0, st0 = 0;
+  for (const t of TRACKS) for (let i = 1; i < t.tiers.length; i++) {
+    s.levels[t.id] = i;
+    const q = progress(s.levels);
+    assert.ok(q > p, `buying ${t.tiers[i].name} did not move the drift on`);
+    p = q;
+  }
+  assert.ok(Math.abs(p - 1) < 1e-9, `fully upgraded drift is ${p}, not 1`);
+  for (let q = 0; q <= 1; q += 0.05) {
+    const w = weather(q), k = stage(q);
+    assert.ok(k >= st0 && [w.petals, w.rain, w.storm].every(v => v >= 0 && v <= 1), `stage/weather out of range at ${q}`);
+    st0 = k;
+  }
+  assert.deepEqual(weather(0.1, true), weather(1), 'a dragon always flies in the full storm');
 }
 
 // --- bot pilot -----------------------------------------------------------------------------

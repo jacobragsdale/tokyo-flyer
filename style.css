@@ -364,6 +364,7 @@ kbd {
 }
 @keyframes glow { to { text-shadow: 0 0 2px #fff, 0 0 14px var(--orange), 0 0 34px var(--magenta2), 0 0 70px var(--magenta2); } }
 .victory span { font: 500 16px var(--jp); letter-spacing: .3em; color: #ffd0e6; }
+.victory p { margin-top: 6px; font-size: 14px; letter-spacing: .04em; color: var(--fg); text-wrap: balance; }
 
 /* ---------- Settings ---------- */
 .settings { pointer-events: auto; width: min(400px, calc(100% - 32px)); padding: 0; border: 0; background: none; color: var(--fg); overflow: visible; }
@@ -426,6 +427,7 @@ kbd {
   .victory { padding: 6px 12px; }
   .victory b { display: inline; font-size: 22px; }
   .victory span { margin-left: .6em; font-size: 14px; }
+  .victory p { margin-top: 2px; font-size: 12px; }
   .rcol { gap: 8px; }
   .rdist { font-size: 46px; }
   .record { padding: 4px 12px; letter-spacing: .12em; }

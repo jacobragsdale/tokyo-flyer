@@ -32,7 +32,7 @@ const MARKUP = `
   <div class="logo">
     <h1><span class="w1">TOKYO</span> <span class="w2">FL<span class="flick">Y</span>ER</span></h1>
     <p class="jp" lang="ja">東京フライヤー</p>
-    <p class="tag">Sled down · launch · fly over the city to Tokyo Tower</p>
+    <p class="tag">Slide down · leap · fly over the city to Tokyo Tower</p>
   </div>
   <button class="start" data-act="start">Press Space · Tap to start</button>
 </section>
@@ -92,7 +92,8 @@ const MARKUP = `
 
 <section class="screen results" data-screen="results" hidden>
   <div class="panel">
-    <div class="victory" id="r-won" hidden><b>You reached Tokyo Tower</b><span lang="ja">東京タワー到達！</span></div>
+    <div class="victory" id="r-won" hidden><b>You reached Tokyo Tower</b><span lang="ja">登竜門 · 東京タワー到達！</span>
+      <p>A koi that leaps the Dragon Gate becomes a dragon. So did you.</p></div>
     <div class="rcol">
       <p class="kicker" id="r-kicker"></p>
       <p class="rdist"><b id="r-dist">0.0</b><small>m</small></p>
@@ -340,6 +341,7 @@ function renderShop() {
     const c = cards[t.id] ??= makeCard(t);
     const lv = save.levels[t.id] ?? 0, cur = t.tiers[lv], next = t.tiers[lv + 1];
     const poor = !!next && save.yen < next.price;
+    put(c.icon, cur.kanji ?? t.kanji); // a tier can rename its track's kanji (No Wings: 翼 becomes 龍)
     put(c.cur, cur.name);
     put(c.perk, cur.perk);
     [...c.pips.children].forEach((p, i) => p.classList.toggle('on', i < lv));

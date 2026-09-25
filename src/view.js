@@ -1,12 +1,13 @@
 // Tokyo Flyer renderer: bloom pipeline, camera, streamed terrain, in-run / kicker / start torii / lamps,
-// distance boards, BEST / milestone beams, GOAL board, Tokyo Tower, lanterns + boost rings, GPU particles, trail, speed lines.
-// Rider art lives in rider.js; sky, city, dragons and snowfall come from backdrop.js.
+// distance boards, BEST / milestone beams, GOAL board, Tokyo Tower, lanterns + boost rings, GPU particles, trail, speed lines,
+// and the rider's dragon form once they've earned it. Rider art lives in rider.js; sky, city, dragons, lightning and
+// weather come from backdrop.js.
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { createBackdrop } from './backdrop.js';
+import { createBackdrop, Dragon, dragonMesh, PLAYER_DRAGON } from './backdrop.js';
 import { GOAL } from './items.js';
 import { TN, C, neon, U, PREMUL, TUBE, Art, vecMaterial, ribbonMaterial, Ribbon, arc, rrect, createRider } from './rider.js';
 
@@ -15,7 +16,7 @@ const BLOOM = 0.55;
 const GATES = [20, 24, 33, 43, 54, 66];
 const TOWER_X = GOAL + 30, TOWER_Z = -70;
 
-export function createView(canvas, T) {
+export function createView(canvas, T, hooks = {}) {
   const phone = matchMedia('(pointer: coarse)').matches;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
   renderer.info.autoReset = false;
@@ -34,7 +35,7 @@ export function createView(canvas, T) {
   composer.addPass(new OutputPass());
 
   const uH = { value: 20 }, uPtScale = { value: 500 }, uAspect = { value: 1 };
-  const backdrop = createBackdrop(scene, camera);
+  const backdrop = createBackdrop(scene, camera, { bolt: (delay, k) => { flashCol.copy(FLASH_BOLT).multiplyScalar(Math.min(2, k)); F.flash = Math.max(F.flash, 0.8); hooks.thunder?.(delay, k); } });
   const add = (o, order, cull = false) => { o.renderOrder = order; o.frustumCulled = cull; scene.add(o); return o; };
 
   // ================================================================ terrain (streamed chunks, one ring buffer)
@@ -176,7 +177,12 @@ export function createView(canvas, T) {
     W.shape(rrect(gx - 0.26, gy + 2.5, gx + 0.26, gy + 2.9, 0.04), C(TN.bg_dark), neon(TN.yellow, 0.8), 0.01);
     toriiRange.push([v0, W.count]);
   }
-  // kicker: steel ramp body between the deck and the snow, panel seams, trusses, chase lights, lip beacon
+  // the lip sign's pole, behind the kicker (the board itself is its own mesh, below: its light is animated)
+  const SIGN = { x: -4.4, y: T.h(-4.4) + 3.3, z: -1.4, w: 1.1, h: 2.75 };
+  W.z = SIGN.z;
+  W.line([SIGN.x, ground(SIGN.x) - 0.5, SIGN.x, SIGN.y - SIGN.h / 2], neon(TN.comment, 0.55), 0.04);
+  for (const dy of [0.25, 0.7]) W.line([SIGN.x, SIGN.y - SIGN.h / 2 + dy, SIGN.x + 0.35, SIGN.y - SIGN.h / 2 + dy], neon(TN.comment, 0.45), 0.02);
+  // kicker: steel ramp body between the deck and the ground, panel seams, trusses, chase lights, lip beacon
   {
     W.z = 0.1;
     const top = [], bot = [];
@@ -218,7 +224,8 @@ export function createView(canvas, T) {
   const atlasTex = new THREE.CanvasTexture(atlas);
   atlasTex.minFilter = THREE.LinearMipmapLinearFilter;
   const glyph = {}, EM = 80, ROW = 110, PAD = 16;
-  const FONT = `700 ${EM}px Oxanium, "Avenir Next", system-ui, sans-serif`, JP = `500 ${EM}px "M PLUS Rounded 1c", "Hiragino Maru Gothic ProN", "Hiragino Sans", sans-serif`;
+  const JPF = '"M PLUS Rounded 1c", "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP", sans-serif';
+  const FONT = `700 ${EM}px Oxanium, "Avenir Next", system-ui, sans-serif`, JP = `500 ${EM}px ${JPF}`;
   function drawAtlas() {
     const g = atlas.getContext('2d');
     g.clearRect(0, 0, 1024, 512); g.fillStyle = '#fff'; g.textBaseline = 'middle';
@@ -311,8 +318,39 @@ export function createView(canvas, T) {
     for (const a of [lA, lB, lC, lD]) a.needsUpdate = true;
     labelGeo.instanceCount = nLab;
   }
-  drawAtlas(); layoutLabels();
-  document.fonts?.load(FONT, '0123456789GOALBEST').then(() => document.fonts.load(JP, '東京タワー')).then(() => { drawAtlas(); layoutLabels(); }).catch(() => {});
+  // ================================================================ the lip sign: a vertical neon kanban, 跳 ("leap") over three
+  // chevrons. It powers on as you come down the kicker, the chevrons fill as the lip nears, and the whole sign flashes
+  // about a reaction time before the perfect-pop window, so a player who looks up learns when to press ↑.
+  const signCv = document.createElement('canvas'); signCv.width = 192; signCv.height = 480;
+  const signTex = new THREE.CanvasTexture(signCv);
+  signTex.colorSpace = THREE.SRGBColorSpace; signTex.minFilter = THREE.LinearMipmapLinearFilter;
+  function drawSign() {
+    const g = signCv.getContext('2d'), w = 192, h = 480;
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = '#07080d'; g.beginPath(); g.roundRect(8, 8, w - 16, h - 16, 18); g.fill();
+    g.strokeStyle = '#ff007c'; g.lineWidth = 7; g.beginPath(); g.roundRect(20, 20, w - 40, h - 40, 12); g.stroke();
+    g.fillStyle = '#ff5fae'; g.font = `500 124px ${JPF}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('跳', w / 2, 128);
+    g.strokeStyle = '#7dcfff'; g.lineWidth = 14; g.lineCap = g.lineJoin = 'round';
+    for (let k = 0; k < 3; k++) { const y = 400 - k * 62; g.beginPath(); g.moveTo(w / 2 - 44, y); g.lineTo(w / 2, y - 40); g.lineTo(w / 2 + 44, y); g.stroke(); }
+    signTex.needsUpdate = true;
+  }
+  const signU = { uMap: { value: signTex }, uOn: { value: 0.12 }, uFill: { value: 0 }, uFlash: { value: 0 } };
+  const sign = add(new THREE.Mesh(new THREE.PlaneGeometry(SIGN.w, SIGN.h), new THREE.ShaderMaterial({
+    ...PREMUL, uniforms: signU,
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
+    fragmentShader: `uniform sampler2D uMap; uniform float uOn, uFill, uFlash; varying vec2 vUv;
+      void main() {
+        vec4 t = texture2D(uMap, vUv);
+        float ch = vUv.y < .54 ? floor((vUv.y - .14) / .129) : -1.; // which chevron, 0 = lowest; -1 = frame and glyph
+        float on = ch < -.5 ? uOn : uOn * (.04 + .96 * step(ch + 1., uFill * 3. + .001));
+        float n = smoothstep(.15, .5, max(t.r, max(t.g, t.b)));      // neon tubes vs the dark board
+        vec3 c = t.rgb * mix(1., .25 + 3. * on + 2.2 * uFlash, n), halo = textureLod(uMap, vUv, 3.5).rgb * (1.2 * on + 1.4 * uFlash);
+        gl_FragColor = vec4(c * t.a + halo * .35, t.a * .92);
+      }`,
+  })), 12);
+  sign.position.set(SIGN.x, SIGN.y, SIGN.z);
+  drawAtlas(); layoutLabels(); drawSign();
+  document.fonts?.load(FONT, '0123456789GOALBEST').then(() => document.fonts.load(JP, '東京タワー跳')).then(() => { drawAtlas(); layoutLabels(); drawSign(); }).catch(() => {});
 
   // ================================================================ beams: BEST (gold), milestone flash
   const bA = new THREE.InstancedBufferAttribute(new Float32Array(8), 4), bB = new THREE.InstancedBufferAttribute(new Float32Array(8), 4);
@@ -407,9 +445,9 @@ export function createView(canvas, T) {
   const pGeo = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(PN * 3), 3))
     .setAttribute('pa', pa).setAttribute('pb', pb).setAttribute('pc', pc);
   // kinds: gravity, drag, size growth, additivity
-  const KINDS = [new THREE.Vector4(5, 2.4, 2.4, 0.12), new THREE.Vector4(5, 1.3, 0.15, 1), new THREE.Vector4(-0.8, 2.4, 0.3, 1),
+  const KINDS = [new THREE.Vector4(7, 2.2, 1.6, 0.25), new THREE.Vector4(5, 1.3, 0.15, 1), new THREE.Vector4(-0.8, 2.4, 0.3, 1),
     new THREE.Vector4(9.8, 0.8, 1, 0.3), new THREE.Vector4(1.4, 2.8, 3.2, 0.1)];
-  const SNOW = 0, SPARK = 1, GLITTER = 2, DEBRIS = 3, PUFF = 4;
+  const SPRAY = 0, SPARK = 1, GLITTER = 2, DEBRIS = 3, PUFF = 4; // spray: water thrown up off the wet ground
   add(new THREE.Points(pGeo, new THREE.ShaderMaterial({
     ...PREMUL, depthTest: false, uniforms: { uTime: U.uTime, uScale: uPtScale, uKinds: { value: KINDS } },
     vertexShader: `attribute vec4 pa, pb, pc; uniform float uTime, uScale; uniform vec4 uKinds[5];
@@ -551,19 +589,54 @@ export function createView(canvas, T) {
 
   // ================================================================ rider
   const rider = createRider();
-  scene.add(rider.group); add(rider.scarf, 16); // (a Group's renderOrder would re-sort all its children)
+  scene.add(rider.group, rider.streamers); // (a Group's renderOrder would re-sort all its children: keep them at 0)
+
+  // ================================================================ the rider's dragon form: a sky dragon (backdrop.js) whose
+  // head is the rider and whose body follows the path the head has flown or slid. Fed every frame, shown once earned.
+  const pdMesh = add(dragonMesh([PLAYER_DRAGON]), 16);
+  pdMesh.material.depthTest = false; pdMesh.visible = false;
+  const pd = new Dragon(PLAYER_DRAGON, 0, pdMesh.geometry.attributes.position.array, null);
+  pd.step = 0.15; // trail spacing, m: 256 points hold ~38 m of path, more than the longest body
+  const PD = { init: false, x: 0, y: 0, grow: 1, wave: 1, bufH: 1000 };
+  function feedDragon(dt, r, s, cam) {
+    const hx = rider.world.hx, hy = rider.world.hy;
+    if (!PD.init || Math.hypot(hx - PD.x, hy - PD.y) > 25) { // first frame or a teleport (back to the gate): lay the body up the slope
+      const off = hy - T.h(hx), c = 1 / Math.hypot(1, T.slope(hx));
+      pd.settle(hx, hy, (d, out) => { out[0] = hx - d * c; out[1] = T.h(out[0]) + off; });
+      PD.init = true;
+    } else { pd.hx = hx; pd.hy = hy; pd.advance(); }
+    PD.x = hx; PD.y = hy;
+    if (!pdMesh.visible) return;
+    PD.wave += ((r.ground ? 0.3 : 1) - PD.wave) * (1 - Math.exp(-dt * 3)); // lies low on the ground, swims in the air
+    pd.L = Math.min(34, 8 * s) * PD.grow;
+    pd.age += dt * (r.boosting ? 2.2 : 1);
+    pdMesh.material.uniforms.uT.value += dt * (r.boosting ? 3 : 1); // pulses race down the body while boosting
+    pd.build(pd.age, 0.6 * cam.h / PD.bufH, PD.wave, 0.042);
+    pdMesh.geometry.attributes.position.needsUpdate = true;
+  }
 
   // ================================================================ API
   // per-frame scalars: object fields are updated in place by V8, closure `let` doubles get re-boxed on every write
-  const F = { t: 0.5, lastA: 0.5, spray: 0.5, spark: 0.5, light: 0.5, flash: 0.5, kick: 0.5, mile: 0.5, mileX: 0.5, trailLast: 0.5 };
+  const F = { t: 0.5, lastA: 0.5, spray: 0.5, spark: 0.5, light: 0.5, flash: 0.5, kick: 0.5, mile: 0.5, mileX: 0.5, trailLast: 0.5, drops: 0.5, wake: 0.5,
+    signT: 0.5, signNear: 0.5, signFlash: 0.5 };
   for (const k in F) F[k] = 0;
   const QCOL = { perfect: neon(TN.green1, 2.2), good: neon(TN.blue, 2), sketchy: neon(TN.orange, 2), crash: neon(TN.red, 2.2) };
-  const SNOWC = C(TN.fg, 0.95), SNOWD = C(TN.blue5, 0.6), WARM = neon(TN.yellow, 2.2), PINK = neon(TN.magenta2, 1.6), CYAN = neon(TN.cyan, 2.2), WHITE = neon(TN.fg, 2.2);
+  const WATER = C(TN.blue5, 0.85), MIST = C(TN.blue, 0.5), CLOUD = C(TN.magenta, 0.45), WARM = neon(TN.yellow, 2.2), PINK = neon(TN.magenta2, 1.6), CYAN = neon(TN.cyan, 2.2), WHITE = neon(TN.fg, 2.2);
   const scale = h => Math.max(1, (0.035 * h) / 1.6); // rider ≥ ~3.5 % of the view height
   const SPARK_RATE = [0, 110, 45, 35, 80], FLASH_POP = neon(TN.fg, 0.045), FLASH_CRASH = neon(TN.red, 0.1), RED = neon(TN.red, 1.8);
+  const FLASH_BOLT = neon('#b8c6ff', 0.05), FLASH_WAKE = neon(TN.magenta2, 0.16);
+  let rain = 0;
 
-  function setLoadout(levels) {
+  // look = { p, dragon, won, legacy, petals, rain, storm }: how far the rider has turned, and the weather that follows
+  function setLook(look) {
+    rider.setLook(look); backdrop.setLook(look);
+    pdMesh.visible = !!look.dragon; PD.grow = 1; F.wake = 0; rider.fade(1);
+    rain = look.rain ?? rain;
+  }
+
+  function setLoadout(levels, look) {
     rider.setLoadout(levels);
+    if (look) setLook(look);
     gateSel = levels.gate | 0;
     const A = worldCol.array;
     toriiRange.forEach(([a, b], i) => { const k = i === gateSel ? 2.4 : 1; for (let v = a * 4; v < b * 4; v += 4) { A[v] = baseCol[v] * k; A[v + 1] = baseCol[v + 1] * k; A[v + 2] = baseCol[v + 2] * k; } });
@@ -612,7 +685,7 @@ export function createView(canvas, T) {
         }
         break;
       case 'launch':
-        burst(16, SNOW, x - 0.3, y, 2, 3, 4, 0.3 * s, 0.7, SNOWC, 0.7);
+        burst(16, SPRAY, x - 0.3, y, 2, 3, 4, 0.22 * s, 0.7, WATER, 0.7);
         ring(x, y, 1.8 * s, 0.05 * s, 0.3, CYAN, 0, 0.35);
         break;
       case 'land': {
@@ -620,8 +693,8 @@ export function createView(canvas, T) {
         const n = Math.min(120, 24 + vn * 7), sp = Math.min(3, 0.6 + vn * 0.12), v = d.speed ?? 10;
         for (let i = 0; i < n; i++) {
           const f = (Math.random() * 2 - 1), up = 1.5 + Math.random() * 4 * sp;
-          emit(i % 3 ? SNOW : PUFF, x + f * 0.6 * s, y + 0.1, cs * (f * 5 * sp + v * 0.35) - sn * up, sn * (f * 5 * sp + v * 0.35) + cs * up,
-            (i % 3 ? 0.3 : 0.7) * s * (0.6 + Math.random() * 0.8), 0.5 + Math.random() * 0.7, i % 3 ? SNOWC : SNOWD, 0.85);
+          emit(i % 3 ? SPRAY : PUFF, x + f * 0.6 * s, y + 0.1, cs * (f * 5 * sp + v * 0.35) - sn * up, sn * (f * 5 * sp + v * 0.35) + cs * up,
+            (i % 3 ? 0.2 : 0.7) * s * (0.6 + Math.random() * 0.8), 0.5 + Math.random() * 0.7, i % 3 ? WATER : MIST, 0.85);
         }
         burst(d.quality === 'perfect' ? 30 : 12, GLITTER, x, y + 0.3, cs * v * 0.3, sn * v * 0.3, 5, 0.18 * s, 0.7, col);
         ring(x, y, (1.4 + vn * 0.3) * s, 0.045 * s, 0.35, col, sl, 0.12);
@@ -632,7 +705,7 @@ export function createView(canvas, T) {
       case 'crash': {
         const v = d.speed ?? 10;
         rider.crash(v);
-        burst(70, DEBRIS, x, y + 0.3, v * 0.3, 3, 7, 0.3 * s, 1.1, SNOWC, 0.9);
+        burst(70, DEBRIS, x, y + 0.3, v * 0.3, 3, 7, 0.24 * s, 1.1, WATER, 0.9);
         burst(16, SPARK, x, y + 0.4, v * 0.2, 2, 9, 0.14 * s, 0.5, PINK);
         ring(x, y + 0.3, 3.2 * s, 0.06 * s, 0.45, RED);
         F.kick = Math.max(F.kick, 0.4); flashCol.copy(FLASH_CRASH); F.flash = 0.7;
@@ -643,6 +716,16 @@ export function createView(canvas, T) {
         ring(x, y + 0.5, 4 * s, 0.05 * s, 0.5, MILE);
         F.mileX = d.dist ?? x; F.mile = 1; uFlare.value.set(F.mileX, U.uTime.value); F.kick = Math.max(F.kick, 0.35);
         break;
+      case 'awaken': { // the reveal: lightning finds the rider, the kid is gone in a burst, and a dragon unfurls from them
+        const bx = rider.world.hx, by = rider.world.hy, top = camera.position.y + (camera.position.z + 60) * Math.tan(THREE.MathUtils.degToRad(20));
+        burst(60, SPARK, bx, by, 0, 0, 16, 0.16 * s, 0.9, PINK); burst(40, GLITTER, bx, by, 0, 0, 10, 0.2 * s, 1.4, neon(TN.magenta, 2));
+        for (const [R, dur, col] of [[6, 0.5, WHITE], [10, 0.8, PINK], [15, 1.2, neon(TN.magenta, 1.6)]]) ring(bx, by, R * s, 0.08 * s, dur, col);
+        flashCol.copy(FLASH_WAKE); F.flash = 1; F.kick = Math.max(F.kick, 0.8);
+        if (d.look) backdrop.setLook(d.look);
+        backdrop.strike(bx - 4 * s, top, by, -60, 2); backdrop.escort();
+        rain = d.look?.rain ?? rain; F.wake = F.t;
+        break;
+      }
     }
   }
 
@@ -651,7 +734,7 @@ export function createView(canvas, T) {
     const w = canvas.clientWidth || innerWidth, h = canvas.clientHeight || innerHeight;
     dprSeen = devicePixelRatio;
     const dpr = Math.min(devicePixelRatio || 1, 2, Math.sqrt(3.5e6 / (w * h)));
-    renderer.setPixelRatio(dpr); renderer.setSize(w, h, false);
+    renderer.setPixelRatio(dpr); renderer.setSize(w, h, false); PD.bufH = h * dpr;
     composer.setPixelRatio(dpr); composer.setSize(w, h);
     camera.aspect = uAspect.value = w / h; camera.updateProjectionMatrix();
     U.uPxK.value = K / h; uPtScale.value = (h * dpr) / K;
@@ -671,22 +754,48 @@ export function createView(canvas, T) {
     searchlights.visible = Math.abs(cam.x - TOWER_X) < 1200;
     if (searchlights.visible) aimBeams(F.t);
 
-    // rider + scarf + light pool on the snow
+    // rider (+ the reveal's hand-over to the dragon form) + light pool on the ground
+    if (F.wake > 0) {
+      const m = (F.t - F.wake) / 1.3;
+      if (m >= 0.2 && !rider.dragon) { rider.setLook({ dragon: true }); pdMesh.visible = true; }
+      rider.fade(m < 0.2 ? 1 - m / 0.2 : Math.min(1, (m - 0.2) / 0.3));
+      PD.grow = 0.06 + 0.94 * (1 - (1 - Math.min(1, Math.max(0, m - 0.2) / 0.8)) ** 3);
+      pdMesh.material.uniforms.uAlpha.value = Math.min(1, Math.max(0, m - 0.2) / 0.25);
+      if (m >= 1.2) { F.wake = 0; rider.fade(1); PD.grow = 1; }
+    }
     rider.update(dt, r, s, F.t);
+    feedDragon(dt, r, s, cam);
     F.light += ((r.ground && !r.crashed ? 0.35 + Math.min(0.65, r.speed / 25) : 0) - F.light) * (1 - Math.exp(-dt * 8));
     uRider.value.set(r.x, r.y + 0.3, F.light);
 
-    // snow spray while grounded (maglev hovers: cyan sparkle instead), heavier in a tuck or a carve
+    // water spray off the wet ground while grounded (the storm cloud hovers: it sheds puffs of mist instead), heavier in a tuck or a carve
     const ca = Math.cos(r.a), sa = Math.sin(r.a), turn = Math.abs(r.a - F.lastA) / Math.max(dt, 1e-3); F.lastA = r.a;
     if (r.ground && r.speed > 2) {
       F.spray += dt * r.speed * (r.crashed ? 10 : r.tuck ? 7 : 4.5) * (1 + Math.min(2, turn * 0.8));
-      const maglev = rider.sled === 5 && !r.crashed;
+      const cloud = rider.sled === 5 && !r.crashed && !rider.dragon;
       for (; F.spray >= 1; F.spray--) {
         const bx = r.x - ca * 0.45 * s, by = r.y - sa * 0.45 * s, k = 0.25 + Math.random() * 0.4, up = 0.8 + Math.random() * (r.tuck ? 3.2 : 2.2);
-        if (maglev) emit(GLITTER, bx, by + 0.15 * s, -ca * r.speed * 0.2, 0.6, 0.12 * s, 0.4, CYAN, 0.7);
-        else emit(r.crashed ? DEBRIS : SNOW, bx, by + 0.05, -ca * r.speed * k - sa * up, -sa * r.speed * k + ca * up, (r.tuck ? 0.34 : 0.26) * s * (0.6 + Math.random()), 0.45 + Math.random() * 0.45, SNOWC, 0.75);
+        if (cloud) emit(PUFF, bx, by + 0.15 * s, -ca * r.speed * 0.15, 0.3, 0.4 * s, 0.6, CLOUD, 0.35);
+        else emit(r.crashed ? DEBRIS : SPRAY, bx, by + 0.05, -ca * r.speed * k - sa * up, -sa * r.speed * k + ca * up, (r.tuck ? 0.24 : 0.18) * s * (0.6 + Math.random()), 0.45 + Math.random() * 0.45, WATER, 0.75);
       }
     } else F.spray = 0;
+    // rain splashing on the ground in view
+    const hw2 = cam.h * 0.5 * camera.aspect;
+    F.drops += dt * 70 * rain * (phone ? 0.5 : 1);
+    for (; F.drops >= 1; F.drops--) {
+      const x = cam.x + (Math.random() * 2 - 1) * hw2, y = T.h(x);
+      if (y > cam.y - cam.h * 0.55) emit(SPRAY, x, y, (Math.random() - 0.5) * 1.5, 1 + Math.random() * 1.5, 0.05 * s + 0.004 * cam.h, 0.25, WATER, 0.6);
+    }
+    // lip sign: stutters on as you come down the kicker, chevrons fill over the last second, and it flashes from 0.3 s
+    // before the lip, so pressing ↑ on the flash lands in the perfect-pop window (≤ 0.12 s) after a reaction time
+    const near = r.ground && r.x < 0 && r.x > -40, tLip = -r.x / Math.max(1, r.speed);
+    if (near && !F.signNear) F.signT = F.t;
+    F.signNear = near ? 1 : 0;
+    const stutter = F.t - F.signT < 0.45 && Math.floor((F.t - F.signT) * 22) % 3 === 0 ? 0.2 : 1;
+    signU.uOn.value += ((near ? stutter : 0.12) - signU.uOn.value) * (1 - Math.exp(-dt * (near ? 30 : 3)));
+    signU.uFill.value = near ? Math.min(1, Math.max(0, (1 - tLip) / 0.7)) : Math.max(0, signU.uFill.value - dt * 1.5);
+    if (near && tLip < 0.3) F.signFlash = 1;
+    signU.uFlash.value = F.signFlash *= Math.exp(-dt * 5);
     // booster sparks
     const wv = rider.world;
     if (wv.flame > 0.3) {
@@ -705,6 +814,7 @@ export function createView(canvas, T) {
       if (trailN === 0 || F.t - F.trailLast > 1 / 45) { trailHead = (trailHead + 1) % TN_; trailN = Math.min(TN_, trailN + 1); F.trailLast = F.t; }
       trailRing[trailHead * 3] = bx; trailRing[trailHead * 3 + 1] = by; trailRing[trailHead * 3 + 2] = F.t;
     } else trailLive = false;
+    trail.mesh.visible = !pdMesh.visible; // a dragon's body is its own trail
     if (trailN > 1) {
       const P = trail.pts;
       for (let i = 0; i < trailN; i++) {

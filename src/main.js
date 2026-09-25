@@ -1,14 +1,19 @@
 // Game glue: fixed-step loop, input, camera, run lifecycle, pickups and scoring.
 import { makeTerrain, newRider, step, DT } from './physics.js';
-import { TRACKS, GOAL, loadSave, storeSave, newSave, loadoutStats, buy, payout } from './items.js';
+import { TRACKS, GOAL, loadSave, storeSave, newSave, loadoutStats, buy, payout, progress, weather } from './items.js';
 import { createView } from './view.js';
 import { initUI, showScreen, updateHUD, toast } from './ui.js';
 import { audio } from './audio.js';
 
 const T = makeTerrain();
 let save = loadSave();
-const view = createView(document.getElementById('game'), T);
-view.setLoadout(save.levels);
+const demo = new URLSearchParams(location.search).get('yen'); // ?yen=50000: pocket money for a demo (once; the URL is cleaned)
+if (demo) { save.yen += Math.max(0, +demo || 0); storeSave(save); history.replaceState(null, '', location.pathname); }
+const view = createView(document.getElementById('game'), T, { thunder: (delay, k) => audio.play('thunder', k, delay) });
+// what the world reads from the save: how far the rider has turned, whether they're a dragon yet, and the weather
+const look = () => { const p = progress(save.levels); return (lk = { p, dragon: save.won, won: save.won, legacy: save.legacy, ...weather(p, save.won) }); };
+let lk;
+view.setLoadout(save.levels, look());
 audio.setMuted(save.settings.muted);
 audio.setMusic(save.settings.music);
 
@@ -20,8 +25,8 @@ const inp = { up: false, down: false, boost: false, jump: false };
 const cam = { x: r.x + 8, y: r.y, h: 16, roll: 0 };
 const eye = { x: cam.x, y: cam.y, h: cam.h, lead: 0, trauma: 0, punch: 0 }; // smoothed camera before shake
 const TIME_SCALE = 1.2; // research: same trajectories, ~20% snappier
-let freeze = 0, slowT = 0, slowK = 1;
-let jumpShown = false, wasStalled = false, stallT = -9, acc = 0, items = [], next = 0, got = { lanterns: 0, rings: 0, yen: 0 }, milestone = 0, recordShown = false, endTimer = -1;
+let freeze = 0, slowT = 0, slowK = 1, cineT = 0; // cineT: the reveal's close-up, s left
+let jumpShown = false, wasStalled = false, stallT = -9, acc = 0, items = [], next = 0, got = { lanterns: 0, rings: 0, yen: 0 }, milestone = 0, recordShown = false, endTimer = -1, awoke = false;
 const events = [];
 
 const shopData = () => ({ save, tracks: TRACKS, goal: GOAL });
@@ -32,14 +37,14 @@ initUI({
   onBuy(id) {
     if (buy(save, id)) {
       audio.play('buy'); storeSave(save);
-      st = loadoutStats(save.levels); view.setLoadout(save.levels); resetRider();
+      st = loadoutStats(save.levels); view.setLoadout(save.levels, look()); resetRider();
     } else audio.play('deny');
     showScreen('shop', shopData());
   },
   onEndRun: () => mode === 'run' && finish(),
-  onReset() { // erases progress only: the sound settings stay (the audio module was never told otherwise)
-    save = { ...newSave(), settings: save.settings }; storeSave(save);
-    st = loadoutStats(save.levels); view.setLoadout(save.levels); resetRider(); showScreen('shop', shopData());
+  onReset() { // erases progress only: the sound settings stay, and a dragon you became stays up in the sky
+    save = { ...newSave(), settings: save.settings, legacy: (save.legacy | 0) + (save.won ? 1 : 0) }; storeSave(save);
+    st = loadoutStats(save.levels); view.setLoadout(save.levels, look()); resetRider(); showScreen('shop', shopData());
   },
   onSetting(key, value) {
     save.settings[key] = value; storeSave(save);
@@ -88,7 +93,7 @@ function startRun() {
   resetRider();
   inp.up = inp.down = inp.boost = inp.jump = false;
   items = spawnItems(save.runs + 1);
-  next = 0; got = { lanterns: 0, rings: 0, yen: 0 }; milestone = 0; recordShown = save.best < 20; endTimer = -1; jumpShown = false;
+  next = 0; got = { lanterns: 0, rings: 0, yen: 0 }; milestone = 0; recordShown = save.best < 20; endTimer = -1; jumpShown = false; awoke = false;
   acc = 0; freeze = slowT = 0;
   view.startRun({ items, best: save.best });
   mode = 'run';
@@ -103,7 +108,7 @@ function finish() {
   const run = { dist, airtime: r.airtime, maxAlt: r.maxAlt, flips: r.flips, landing: r.landing, lanterns: got.lanterns, rings: got.rings };
   const pay = payout(run, st.mult, save.best);
   const newRecord = dist > save.best + 0.05;
-  const won = dist >= GOAL && !save.won;
+  const won = awoke || (dist >= GOAL && !save.won);
   save.yen += pay.total; save.runs++;
   if (newRecord) save.best = dist;
   if (won) save.won = true;
@@ -204,6 +209,18 @@ function handle(e) {
   }
 }
 
+// The first time the rider flies past Tokyo Tower: the koi has leapt the Dragon Gate. Saved on the spot, so the
+// next run starts as a dragon even if this one ends in a wipeout.
+function awaken() {
+  awoke = true; save.won = true; storeSave(save);
+  hitStop(0.15, 1.6, 0.35); cineT = 3.4;
+  view.fx('awaken', { look: look() });
+  audio.play('awaken');
+  eye.trauma += 0.6;
+  setTimeout(() => mode === 'run' && toast('登竜門', 'great'), 900);
+  setTimeout(() => mode === 'run' && toast('THE KOI BECAME A DRAGON', 'info'), 1700);
+}
+
 // ------------------------------------------------------------------ camera
 
 const damp = (k, dt) => 1 - Math.exp(-k * dt);
@@ -214,20 +231,21 @@ function updateCamera(dt, v) {
   const alt = Math.max(0, v.y - T.h(v.x));
   let h, lead, ty;
   if (mode === 'run' || mode === 'results') {
-    // zoom with speed, and far enough out that the snow below stays in frame (up to the 160 m cap);
+    // zoom with speed, and far enough out that the ground below stays in frame (up to the 160 m cap);
     // narrow (portrait) screens zoom out further, or the lip and the landing ahead only show up ~0.4 s before you reach them
     h = Math.min(160, Math.max(12 + 0.5 * speed + 0.3 * alt, alt / 0.62 + 4) * Math.max(1, 0.8 / aspect()));
     const L = 0.175 * h * aspect(); // look-ahead ≤ 35% of half the view width
     lead = Math.max(-L, Math.min(L, v.vx * 0.35));
-    // rider ~37% up from the bottom near the ground; higher up, keep the snow ≥10% above the bottom edge
+    // rider ~37% up from the bottom near the ground; higher up, keep the ground ≥10% above the bottom edge
     // but never let the rider climb past ~72% (the HUD lives above that)
     ty = Math.max(v.y - 0.22 * h, Math.min(v.y + 0.125 * h, v.y - alt + 0.4 * h));
+    if (cineT > 0) { h = 17; lead = 0; ty = v.y + 1.5; } // the reveal: close in, rider a little low (clear of the toasts)
   } else if (mode === 'title') {
     h = 70; lead = 0; ty = 10;
   } else {
     h = 20; lead = Math.min(11, 0.3 * h * aspect()); ty = v.y + 0.125 * h - 2; // parked at the gate, looking down the in-run
   }
-  eye.h += (h - eye.h) * damp(h > eye.h ? 3 : 1.2, dt);
+  eye.h += (h - eye.h) * damp(h > eye.h ? 3 : cineT > 0 ? 5 : 1.2, dt);
   eye.lead += (lead - eye.lead) * damp(3, dt);
   const tx = mode === 'title' ? 25 : v.x + eye.lead;
   eye.x += (tx - eye.x) * damp(8, dt);
@@ -253,6 +271,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
+  cineT = mode === 'run' ? Math.max(0, cineT - dt) : 0;
 
   if (mode === 'run' || mode === 'results') { // after the results come up the rider keeps skidding behind them
     let scale = TIME_SCALE;
@@ -278,8 +297,9 @@ function frame(now) {
     while (milestone < MARKS.length && dist >= MARKS[milestone]) {
       const m = MARKS[milestone++];
       toast(m === GOAL ? 'TOKYO TOWER!' : `${m} m`, m === GOAL ? 'great' : 'info');
-      audio.play(m === GOAL ? 'win' : 'milestone');
       view.fx('milestone', { x: r.x, y: r.y, dist: m });
+      if (m === GOAL && !save.won) awaken();
+      else audio.play(m === GOAL ? 'win' : 'milestone');
     }
     if (!recordShown && dist > save.best) { recordShown = true; toast('NEW RECORD!', 'great'); audio.play('record'); }
     updateHUD({ dist, best: save.best, speed: Math.hypot(r.vx, r.vy), alt: Math.max(0, r.y - T.h(r.x)),
@@ -299,7 +319,7 @@ function frame(now) {
   updateCamera(dt, view_r);
   view.frame(dt, view_r, cam);
   audio.frame(dt, { running: mode === 'run', speed: view_r.speed, ground: r.ground, air: !r.ground, tuck: r.tuck,
-    boosting: view_r.boosting, crashed: r.crashed, alt: Math.max(0, r.y - T.h(r.x)) });
+    boosting: view_r.boosting, crashed: r.crashed, alt: Math.max(0, r.y - T.h(r.x)), rain: lk.rain });
 }
 requestAnimationFrame(frame);
 addEventListener('resize', () => view.resize());

@@ -1,5 +1,5 @@
 // Tokyo Flyer audio: pure WebAudio synthesis, no files. One-shot SFX, continuous run layers
-// (snow, wind, booster) and a procedural neon city-pop score in F major pentatonic.
+// (ground hiss, wind, booster), rain that follows the weather, and a procedural neon city-pop score in F major pentatonic.
 // Every call is a silent no-op until unlock(), and nothing in here ever throws into the game.
 
 const MASTER = 0.85, MUSIC = 0.44, MAX_VOICES = 128;
@@ -103,16 +103,13 @@ function brass(t, m, v, hold) {
   }
 }
 
-// Snow crunch: n short grains in quick succession, all from one band-passed noise voice.
-function crunch(t, v, n, f) {
-  const fl = filt('bandpass', f, 0.9), g = gain(0);
-  let at = t;
-  for (let j = 0; j < n; j++, at += rnd(0.012, 0.035)) {
-    fl.frequency.setValueAtTime(f * rnd(0.7, 1.4), at);
-    g.gain.setValueAtTime(v * (1 - j / (n + 1)), at);
-    g.gain.setTargetAtTime(0, at, rnd(0.006, 0.014));
+// Splash off the wet ground: a falling band of noise, then n droplets plinking down in pitch.
+function splash(t, v, n, f) {
+  hiss(t, v, 0.004, 0.22, { f: f * 1.4, f1: f, f2: f * 0.35, q: 0.8 });
+  for (let j = 0; j < n; j++) {
+    const at = t + 0.02 + rnd(0, 0.18), p = f * rnd(1.1, 2.4);
+    tone(at, p, v * 0.18 * (1 - j / (n + 1)), 0.05, { f1: p * 0.55, gt: 0.04 });
   }
-  fire(loopSrc(noiseBuf), t, at + 0.1, sfx, fl, g);
 }
 
 const thump = (t, f, v, d) => tone(t, f, v, d, { f1: f * 0.4, gt: d * 0.6 });
@@ -184,22 +181,22 @@ const SFX = {
   land: (t, k) => {
     const v = 0.3 + 0.5 * Math.min(k, 1.5);
     thump(t, 110, 0.66 * v, 0.2);
-    crunch(t, 0.46 * v, Math.round(3 + 3 * k), 1800);
+    splash(t, 0.4 * v, Math.round(2 + 3 * k), 1800);
   },
   hardland: t => {
     thump(t, 90, 0.6, 0.4);
     hiss(t, 0.3, 0.002, 0.35, { type: 'lowpass', f: 900, f2: 200, q: 0 });
-    crunch(t, 0.35, 9, 1200);
-    hiss(t, 0.15, 0.001, 0.08, { f: 420, q: 6 }); // sled clack
+    splash(t, 0.35, 6, 1200);
+    hiss(t, 0.15, 0.001, 0.08, { f: 420, q: 6 }); // ride clack
   },
   crash: t => {
     [0, 0.22, 0.4, 0.62, 0.8].forEach((dt, j) => {
       const v = 1 - j * 0.17;
       thump(t + dt, rnd(80, 120), 0.6 * v, 0.25);
-      crunch(t + dt, 0.36 * v, 5, rnd(900, 1800));
+      splash(t + dt, 0.3 * v, 3, rnd(900, 1800));
       if (j % 2) hiss(t + dt, 0.14 * v, 0.001, 0.1, { f: rnd(300, 700), q: 7 }); // gear knocks
     });
-    hiss(t, 0.18, 0.05, 1.2, { f: 2000, f1: 1200, f2: 400, q: 0.5 }); // snow spray
+    hiss(t, 0.18, 0.05, 1.2, { f: 2000, f1: 1200, f2: 400, q: 0.5 }); // water spray
   },
   flip: (t, k) => hiss(t, 0.72, 0.08, 0.18, { f: 500, f1: 2600 * (0.85 + 0.15 * k), f2: 800, q: 2 }),
   coin: t => {
@@ -236,6 +233,18 @@ const SFX = {
   ignite: t => { // booster light-up, played automatically on the boosting rising edge
     hiss(t, 0.34, 0.01, 0.35, { type: 'lowpass', f: 300, f1: 2000, f2: 400, q: 1 });
     thump(t, 90, 0.34, 0.3);
+  },
+  thunder: (t, k) => { // k > 1.5: the strike is right here (a crack first); otherwise a far rumble rolling in
+    const near = k > 1.5, v = near ? 0.55 : 0.2 + 0.15 * k;
+    if (near) { hiss(t, 0.5, 0.002, 0.25, { type: 'highpass', f: 1800, q: 0 }); thump(t, 70, 0.6, 0.6); }
+    [0, 0.35, 0.9].forEach((dt, j) => hiss(t + dt * (near ? 0.6 : 1), v * (1 - j * 0.25), 0.15, 2.2 - j * 0.4, { type: 'lowpass', f: 380, f1: 220, f2: 60, q: 0 }));
+  },
+  awaken: t => { // the reveal: temple gong, a rising swell, the chord opening up, bells climbing into the sky
+    bell(t, mtof(41), 0.3, 5, { r: 1.41, i: 2.2 }); bell(t, mtof(53), 0.12, 3.5, { r: 1.41, i: 1.5 });
+    hiss(t, 0.3, 0.9, 0.6, { f: 300, f1: 3500, f2: 800, q: 1.2 });
+    [65, 69, 72, 77].forEach((m, j) => brass(t + 0.9 + j * 0.05, m, 0.06, 1.6));
+    thump(t + 0.9, 60, 0.6, 0.8);
+    for (let j = 0; j < 12; j++) bell(t + 1.0 + j * 0.07, mtof(pent(6 + j)), 0.05, 1.4);
   },
 };
 
@@ -307,6 +316,7 @@ function layers(s) {
   glide(L.flutAmt.gain, b ? 0.16 : 0, b ? 0.03 : 0.1);
   if (air) airUntil = ctx.currentTime + 3;
   glide(airG.gain, air ? clamp(0.4 + (+s.alt || 0) / 80, 0.4, 1) : 0, 0.8);
+  glide(L.rain.gain, s ? 0.09 * clamp(+s.rain || 0, 0, 1) : 0, 0.6);
 }
 
 // ---------- graph ----------
@@ -354,6 +364,8 @@ function build() {
   const whistle = gain(0, amb), whistleBp = filt('bandpass', 1000, 16, whistle), gustAmt = gain(300);
   hissSrc.connect(windBp); hissSrc.connect(whistleBp);
   gust.connect(gustAmt); gustAmt.connect(windBp.detune); gustAmt.connect(whistleBp.detune);
+  const rain = gain(0, amb); // rain on everything: bright hiss with a slow swell
+  hissSrc.connect(filt('highpass', 2500, 0, filt('lowpass', 9000, 0, rain)));
   const boost = gain(0, amb), flutAmt = gain(0, boost.gain);
   hissSrc.connect(filt('lowpass', 800, 1, boost));
   saw.type = 'sawtooth'; saw.frequency.value = 55;
@@ -361,7 +373,7 @@ function build() {
   crackle.connect(filt('highpass', 1500, 0, gain(0.8, boost)));
   flutter.connect(flutAmt);
   [lfo, hissSrc, grain, gust, flutter, crackle, saw].forEach(n => n.start());
-  L = { snow, snowLp, grainAmt, grain, wind, windBp, whistle, whistleBp, boost, flutAmt };
+  L = { snow, snowLp, grainAmt, grain, wind, windBp, whistle, whistleBp, boost, flutAmt, rain };
 
   nextT = ctx.currentTime + 0.1;
   setInterval(safe(tick), 25); // lookahead scheduler: ~120 ms ahead, independent of frame rate
@@ -386,9 +398,9 @@ function frame(dt, s) {
   layers(s);
 }
 
-function play(name, k = 1) {
+function play(name, k = 1, delay = 0) {
   if (!ctx || muted || !SFX[name]) return;
-  SFX[name](ctx.currentTime, clamp(+k || 0, 0, 2));
+  SFX[name](ctx.currentTime + Math.max(0, +delay || 0), clamp(+k || 0, 0, 2));
 }
 
 function setMuted(b) {
