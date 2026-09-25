@@ -254,7 +254,7 @@ kbd {
 .fuel .meter i { background: linear-gradient(90deg, var(--magenta2), var(--orange)); }
 .fuel.low .meter i { background: var(--red); animation: breathe .35s ease-in-out infinite alternate; }
 .gauges { top: calc(var(--pt) + 4px); left: var(--pl); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.gauge { display: flex; align-items: baseline; gap: 6px; padding: 6px 12px; border-radius: 10px; background: rgb(22 22 30 / .5); border: 1px solid var(--line); }
+.gauge { display: flex; align-items: baseline; gap: 6px; padding: 6px 12px; border-radius: 10px; background: rgb(22 22 30 / .8); border: 1px solid var(--line); } /* the in-run's neon rim runs right behind them */
 .gauge b { min-width: 2.3ch; font: 700 22px/1 var(--ui); font-variant-numeric: tabular-nums; text-align: right; color: var(--fg); }
 .gauge i { font-size: 13px; font-style: normal; color: var(--fg-dark); }
 .side { top: calc(var(--pt) + 4px); right: var(--pr); display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
@@ -288,8 +288,10 @@ kbd {
 
 /* ---------- Toasts ---------- */
 .toasts {
-  position: absolute; left: var(--pl); right: var(--pr); bottom: 54%; z-index: 5; /* grows upward: new at the anchor */
-  display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center;
+  /* just under the HUD, above the band where the camera keeps the rider (≤ 72 % up); newest on top, so
+     expiring toasts never shift it and older ones slide down only during landing bursts, when the rider is low */
+  position: absolute; left: var(--pl); right: var(--pr); top: 21%; z-index: 5;
+  display: flex; flex-direction: column-reverse; align-items: center; gap: 2px; text-align: center;
 }
 .toast {
   --c: var(--blue);
@@ -414,7 +416,7 @@ kbd {
   .ndesc { display: none; }
   .primary { font-size: 17px; }
   .dist { font-size: 40px; }
-  .toasts { bottom: 50%; }
+  .toasts { top: 26%; }
   .results { padding-block: 8px; }
   .results .panel { padding: 16px 20px; row-gap: 12px; }
   .victory { padding: 6px 12px; }

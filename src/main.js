@@ -36,7 +36,10 @@ initUI({
     showScreen('shop', shopData());
   },
   onEndRun: () => mode === 'run' && finish(),
-  onReset() { save = newSave(); storeSave(save); st = loadoutStats(save.levels); view.setLoadout(save.levels); resetRider(); showScreen('shop', shopData()); },
+  onReset() { // erases progress only: the sound settings stay (the audio module was never told otherwise)
+    save = { ...newSave(), settings: save.settings }; storeSave(save);
+    st = loadoutStats(save.levels); view.setLoadout(save.levels); resetRider(); showScreen('shop', shopData());
+  },
   onSetting(key, value) {
     save.settings[key] = value; storeSave(save);
     if (key === 'muted') audio.setMuted(value);
@@ -64,7 +67,7 @@ addEventListener('keydown', e => {
   const k = KEYS[e.code];
   if (!k) return;
   e.preventDefault();
-  if (!e.repeat) press(k, true);
+  if (!e.repeat || k === 'down') press(k, true); // ↓ held since the menu still tucks (↑/boost repeats must not pop/fire)
 });
 addEventListener('keyup', e => { const k = KEYS[e.code]; if (k) press(k, false); });
 addEventListener('pointerdown', () => audio.unlock());
@@ -211,8 +214,9 @@ function updateCamera(dt, v) {
   const alt = Math.max(0, v.y - T.h(v.x));
   let h, lead, ty;
   if (mode === 'run' || mode === 'results') {
-    // zoom with speed, and far enough out that the snow below stays in frame (up to the 160 m cap)
-    h = Math.min(160, Math.max(12 + 0.5 * speed + 0.3 * alt, alt / 0.62 + 4));
+    // zoom with speed, and far enough out that the snow below stays in frame (up to the 160 m cap);
+    // narrow (portrait) screens zoom out further, or the lip and the landing ahead only show up ~0.4 s before you reach them
+    h = Math.min(160, Math.max(12 + 0.5 * speed + 0.3 * alt, alt / 0.62 + 4) * Math.max(1, 0.8 / aspect()));
     const L = 0.175 * h * aspect(); // look-ahead ≤ 35% of half the view width
     lead = Math.max(-L, Math.min(L, v.vx * 0.35));
     // rider ~37% up from the bottom near the ground; higher up, keep the snow ≥10% above the bottom edge

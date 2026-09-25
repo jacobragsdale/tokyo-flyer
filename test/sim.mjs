@@ -45,6 +45,18 @@ for (const gl of [1, 2, 3, 4, 5]) {
   }
 }
 
+// --- a late (coyote) pop latches ↑ like a pop on the snow: holding that tap must not pitch the nose up
+{
+  const st = loadoutStats(newSave().levels);
+  const r = newRider(T, st), inp = { up: false, down: false, boost: false, jump: false }, ev = [];
+  while (!r.launched) step(r, inp, st, T, ev);
+  const a0 = r.a;
+  inp.up = inp.jump = true; // ↑ pressed just after the lip and held for a 0.15 s tap
+  for (let i = 0; i < 36; i++) step(r, inp, st, T, ev);
+  assert.ok(ev.some(e => e.type === 'pop' && e.late), 'late pop did not fire');
+  assert.ok(Math.abs(r.a - a0) < 1e-3, `late-pop tap pitched the nose by ${((r.a - a0) * 180 / Math.PI).toFixed(1)}°`);
+}
+
 // --- bot pilot -----------------------------------------------------------------------------
 // skill: 'none' (no input), 'ok' (tucks, pops, lands aligned), 'good' (+ best-glide + boost use)
 export function fly(levels, skill = 'good', trace = false) {

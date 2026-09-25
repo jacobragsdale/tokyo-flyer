@@ -224,7 +224,10 @@ export function showScreen(name, data = {}) {
   S.save = data.save ?? S.save;
   S.tracks = data.tracks ?? S.tracks;
   S.goal = data.goal ?? S.goal;
-  if (name !== 'run') for (const b of root.querySelectorAll('[data-in]')) { b._ids.clear(); press(b, false); }
+  if (name !== 'run') {
+    for (const b of root.querySelectorAll('[data-in]')) { b._ids.clear(); press(b, false); }
+    $('.toasts').replaceChildren(); // run callouts must not float over the results / shop (e.g. after Esc mid-air)
+  }
   if (name !== 'shop' && dlg.open) dlg.close();
   const changed = name !== screen;
   screen = name;

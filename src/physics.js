@@ -107,7 +107,10 @@ export function step(r, inp, st, T, ev) {
     if (jump && !r.crashed) pop(r, T, ev);
     else stepGround(r, inp, st, T, ev, dt);
   } else {
-    if (jump && !r.popped && r.lipT >= 0 && r.t - r.lipT <= COYOTE) pop(r, T, ev, true);
+    if (jump && !r.popped && r.lipT >= 0 && r.t - r.lipT <= COYOTE) {
+      pop(r, T, ev, true);
+      if (inp.up) r.latch |= 1; // the late ↑ was the pop: like a pop on the snow, it must not also pitch the nose up
+    }
     stepAir(r, inp, st, T, ev, dt);
   }
 

@@ -301,8 +301,8 @@ export function createView(canvas, T) {
     const gy = T.h(GOAL), GO = neon(TN.orange, 1.6);  // finish board (scales with zoom like the distance boards)
     for (const px of [-3.4, 3.4]) lab(GOAL, gy, -1.2, 2, px, 1.6, 0.16, 5, null, C(TN.comment, 0.9), 2);
     lab(GOAL, gy, -1.2, 2, 0, 4.6, 8.2, 2.9, null, GO, 1);
-    text('GOAL', GOAL, gy, -1.2, 2, 0, 5.05, 1.25, neon(TN.orange, 2.2));
-    text('東京タワー', GOAL, gy, -1.2, 2, 0, 3.8, 0.62, neon(TN.fg, 1.5));
+    text('GOAL', GOAL, gy, -1.2, 2, 0, 5.05, 1.25, neon(TN.orange, 1.5));
+    text('東京タワー', GOAL, gy, -1.2, 2, 0, 3.8, 0.62, neon(TN.fg, 1.1)); // ≤ ~1.5: brighter text blooms into a blob (thin kana first)
     if (bestX >= 5) {
       const by = T.h(bestX);
       text('BEST', bestX, by, -0.8, 2, 1.25, 3.3, 0.5, neon(TN.yellow, 1.7));
