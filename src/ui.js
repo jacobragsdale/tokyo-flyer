@@ -50,7 +50,10 @@ const MARKUP = `
     <div class="meter"><i id="s-goal"></i></div>
     <span id="s-goaltxt"></span>
   </div>
-  <div class="cards"></div>
+  <div class="room">
+    <div class="mirror" aria-hidden="true"></div>
+    <div class="cards"></div>
+  </div>
   <footer class="dock">
     <ul class="legend keys">
       <li><kbd>↑</kbd>/<kbd>W</kbd> jump · nose up</li>

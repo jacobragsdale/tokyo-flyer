@@ -3,7 +3,7 @@
 //      node test/sim.mjs progress   (also simulates a whole playthrough)
 import assert from 'node:assert/strict';
 import { makeTerrain, newRider, step, DT, G, wrap } from '../src/physics.js';
-import { TRACKS, loadoutStats, newSave, nextTier, buy, payout, GOAL, progress, stage, weather, DRIFT, FINS } from '../src/items.js';
+import { TRACKS, loadoutStats, newSave, nextTier, buy, payout, GOAL, progress, stage, weather, DRIFT } from '../src/items.js';
 
 const T = makeTerrain();
 
@@ -71,7 +71,8 @@ for (const gl of [1, 2, 3, 4, 5]) {
   const s = newSave();
   assert.equal(progress(s.levels), 0);
   assert.equal(stage(0), 0);
-  assert.ok(DRIFT.every(([at], i) => i === 0 || at > DRIFT[i - 1][0]) && DRIFT.at(-1)[0] < FINS, 'drift thresholds must ascend below FINS');
+  assert.ok(DRIFT.every(([at], i) => i === 0 || at > DRIFT[i - 1][0]) && DRIFT.at(-1)[0] < 1, 'drift thresholds must ascend below 1');
+  assert.ok(DRIFT.length <= 15, 'group 0 of the rider mesh has 16 tiers: the base look plus 15 stages');
   let p = 0, st0 = 0;
   for (const t of TRACKS) for (let i = 1; i < t.tiers.length; i++) {
     s.levels[t.id] = i;

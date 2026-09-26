@@ -316,12 +316,14 @@ const PROF = S.map(s => Math.max(s < .09 ? .35 + .8 * Math.exp(-(((s - .035) / .
 const DRAGONS = [ // far → near (also the draw order inside the mesh)
   { c1: TN.yellow, c2: TN.orange, glow: .95, z: [-2350, -1900], L: 900, y: [.34, .5] },
   { c1: TN.purple, c2: TN.blue, glow: 1.2, z: [-1050, -850], L: 380, y: [.3, .52] },
-  { c1: TN.magenta2, c2: TN.magenta, glow: 1.25, z: [-760, -620], L: 280, y: [.36, .54] }, // LEGACY: a flyer from an earlier playthrough
+  { c1: TN.yellow, c2: TN.orange, koi: 1, glow: 1.25, z: [-760, -620], L: 280, y: [.36, .54] }, // LEGACY: a flyer from an earlier playthrough
   { c1: TN.blue1, c2: TN.green1, glow: 1.5, z: [-420, -330], L: 160, y: [.28, .5] },
-  { c1: TN.magenta2, c2: TN.magenta, glow: 1.45, z: [-140, -100], L: 60, y: [.42, .56], near: -48 }, // YOU: the rider's colours
+  { c1: TN.yellow, c2: TN.orange, koi: 1, glow: 1.45, z: [-140, -100], L: 60, y: [.42, .56], near: -48 }, // YOU: the rider's colours
 ];
 const LEGACY = 2, YOU = 4;
-export const PLAYER_DRAGON = { c1: TN.magenta2, c2: TN.magenta, glow: .9 }; // dimmer than the sky dragons: it's close, so its rims are thick
+// the rider's own dragon: a kohaku koi's colours (white, red patches) under gold rims. Dimmer than the sky dragons:
+// it's close, so its rims are thick
+export const PLAYER_DRAGON = { c1: TN.yellow, c2: TN.orange, koi: 1, glow: .9 };
 const CX = new Float32Array(DN), CY = new Float32Array(DN), PX = new Float32Array(DN), PY = new Float32Array(DN);
 const FX = new Float32Array(DN), FY = new Float32Array(DN), NX = new Float32Array(DN), NY = new Float32Array(DN);
 const SX = new Float32Array(12), SY = new Float32Array(12);
@@ -348,9 +350,13 @@ export function dragonMesh(specs) {
   g.setIndex(idx);
   return new THREE.Mesh(g, new THREE.ShaderMaterial({
     ...PREMUL, side: THREE.DoubleSide,
-    uniforms: { uT: { value: 0 }, uAlpha: { value: 1 }, uC1: { value: specs.map(d => neon(d.c1)) }, uC2: { value: specs.map(d => neon(d.c2)) }, uGlow: { value: specs.map(d => d.glow) } },
+    uniforms: { uT: { value: 0 }, uAlpha: { value: 1 }, uC1: { value: specs.map(d => neon(d.c1)) }, uC2: { value: specs.map(d => neon(d.c2)) }, uGlow: { value: specs.map(d => d.glow) },
+      uKoi: { value: specs.map(d => d.koi ?? 0) } },
     vertexShader: 'attribute vec4 aP; varying vec4 vP; void main() { vP = aP; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
-    fragmentShader: `uniform float uT, uAlpha; uniform vec3 uC1[${n}], uC2[${n}]; uniform float uGlow[${n}]; varying vec4 vP;
+    fragmentShader: `uniform float uT, uAlpha; uniform vec3 uC1[${n}], uC2[${n}]; uniform float uGlow[${n}], uKoi[${n}]; varying vec4 vP;
+      float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f *= f * (3. - 2. * f);
+        return mix(mix(h21(i), h21(i + vec2(1., 0.)), f.x), mix(h21(i + vec2(0., 1.)), h21(i + vec2(1., 1.)), f.x), f.y); }
       void main() {
         int i = int(vP.w + .5); vec3 c1 = uC1[i], c2 = uC2[i]; float g = uGlow[i], u = vP.x, v = vP.y, av = abs(v), a;
         vec3 add;
@@ -362,6 +368,11 @@ export function dragonMesh(specs) {
           float eye = smoothstep(.3, .12, length(vec2((u - .022) * 38., v - .36)));
           add = mix(c1, c2, smoothstep(.2, 1., u)) * g * (rim * (1. + .25 * head) + sc * .3 + pulse * .4 + .05) + vec3(1., .95, .8) * eye * 1.8 * g;
           a = .72 * (1. - rim);
+          if (uKoi[i] > .5) { // kohaku: the koi it was, a white body with red patches, under the gold rims
+            vec3 skin = mix(vec3(.82, .84, .9), vec3(.62, .09, .07), smoothstep(.5, .56, vn(vec2(u * 16., v * 1.2 + 3.1 * float(i))))) * (.8 + .2 * (1. - av));
+            a = .96 * (1. - rim);
+            add = skin * a * (1. - .3 * sc) + mix(c1, c2, smoothstep(.2, 1., u)) * g * (rim * (1. + .25 * head) + pulse * .25) + vec3(1., .95, .8) * eye * 1.8 * g;
+          }
         } else if (vP.z < 1.5) { add = c2 * g * (.12 + 1.1 * v * v); a = .08; }                    // dorsal fin
         else if (vP.z < 2.5) { add = mix(c2, c1, u) * g * 1.3 * (1. - .7 * u) * (1. - smoothstep(.4, 1., av)); a = 0.; } // whiskers, horns, mane, tuft
         else { add = c1 * g * (.22 + .9 * smoothstep(.7, 1., u) + .5 * smoothstep(.5, 1., av)); a = .5 * (1. - smoothstep(.7, 1., av)); } // legs, jaw
@@ -813,7 +824,7 @@ export function createBackdrop(scene, camera, hooks = {}) {
 
       if (first) { dragons[3].spawn(env, true); env.next = t + 4; for (let s = 0; s < FS; s++) fw.next[s] += t; }
       else if (t >= env.next) {
-        // the magenta one (the rider's colours) turns up more, comes closer and lingers, the further the rider has turned
+        // the kohaku one (the rider's colours) turns up more, comes closer and lingers, the further the rider has turned
         if (!look.won && !dragons[YOU].on && dr() < .15 + .6 * look.p) dragons[YOU].spawn(env, false, { near: look.p, pace: smooth(.6, .95, look.p) });
         else for (let i = 0, j = Math.floor(dr() * dragons.length); i < dragons.length; i++) {
           const k = (i + j) % dragons.length, d = dragons[k];

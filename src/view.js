@@ -32,6 +32,11 @@ export function createView(canvas, T, hooks = {}) {
   bloom.materialHighPassFilter.fragmentShader = bloom.materialHighPassFilter.fragmentShader.replace(
     'vec4 texel = texture2D( tDiffuse, vUv );', 'vec4 texel = texture2D( tDiffuse, vUv ); if (any(isnan(texel)) || any(isinf(texel))) texel = vec4(0.);');
   composer.addPass(bloom);
+  // The rider is drawn after bloom: bloom turned a figure 20–50 px tall into a ball of light. Its neon strokes keep
+  // their in-shader halo; its booster flame stays in the bloomed scene (it's a light).
+  const riderScene = new THREE.Scene(), riderPass = new RenderPass(riderScene, camera);
+  riderPass.clear = false;
+  composer.addPass(riderPass);
   composer.addPass(new OutputPass());
 
   const uH = { value: 20 }, uPtScale = { value: 500 }, uAspect = { value: 1 };
@@ -41,7 +46,7 @@ export function createView(canvas, T, hooks = {}) {
   // ================================================================ terrain (streamed chunks, one ring buffer)
   const KX = T.kicker.x0, GX = KX - 5, KNOLL = T.h(1e-6);
   const gy0 = T.h(GX), gm0 = T.slope(GX) * -GX;
-  const ground = x => { // snow line under the kicker: cubic from the in-run down to the knoll top
+  const ground = x => { // ground line under the kicker: cubic from the in-run down to the knoll top
     if (x < GX || x >= 0) return T.h(x);
     const t = (x - GX) / -GX, t2 = t * t, t3 = t2 * t;
     return Math.min(T.h(x), (2 * t3 - 3 * t2 + 1) * gy0 + (t3 - 2 * t2 + t) * gm0 + (3 * t2 - 2 * t3) * KNOLL);
@@ -61,29 +66,28 @@ export function createView(canvas, T, hooks = {}) {
   const uRider = { value: new THREE.Vector3(0, 0, 0) };
   const fill = add(new THREE.Mesh(fillGeo, new THREE.ShaderMaterial({
     uniforms: { uTime: U.uTime, uPx: { value: 0.03 }, uRider,
-      uLit: { value: C(TN.fg_gutter, 0.8) }, uMid: { value: C(TN.bg_highlight, 0.8) }, uDeep: { value: C(TN.bg_dark) },
-      uSpill: { value: neon(TN.blue1, 0.014) }, uSpark: { value: neon(TN.blue6, 2.4) } },
+      uLit: { value: C(TN.storm, 1.05) }, uMid: { value: C(TN.bg) }, uDeep: { value: C(TN.bg_dark) },
+      uSpill: { value: neon(TN.blue1, 0.018) }, uSpark: { value: neon(TN.blue6, 2.4) } },
     vertexShader: `attribute float top; varying vec3 vW; varying float vTop;
       void main() { vW = position; vTop = top; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`,
     fragmentShader: `uniform float uTime, uPx; uniform vec3 uLit, uMid, uDeep, uSpill, uSpark, uRider; varying vec3 vW; varying float vTop;
       float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      void main() {
+      void main() { // wet asphalt: a dark surface with a soft sheen of the rim light under it and puddle glints near the edge
         float d = max(vTop - vW.y, 0.), zs = max(1., uPx * 10.), near = smoothstep(.07, .025, uPx);
         vec3 c = mix(uLit, uMid, smoothstep(0., 1.2 * zs, d));
         c = mix(c, uDeep, smoothstep(.8 * zs, 16. + 8. * zs, d));
-        c += uSpill * exp(-d / (.5 * zs));
-        float sd = d / (2.4 * zs) + .2 * sin(vW.x * .09 / zs), ln = 1. - smoothstep(0., 1.5 * fwidth(sd), abs(fract(sd + .5) - .5));
-        c *= 1. - .12 * ln * smoothstep(10. * zs, .6 * zs, d); // snow strata following the surface
-        vec2 g = vec2(vW.x, d) * 7., f = fract(g) - .5; float h = hash(floor(g));
-        float tw = pow(max(0., sin(uTime * (1.5 + 4. * h) + h * 40.)), 8.);
-        c += uSpark * step(.94, h) * tw * smoothstep(.22, 0., length(f)) * smoothstep(1.4, .05, d) * near;
+        float sheen = exp(-d / (1.4 * zs)) * (.55 + .45 * sin(vW.x * 1.3 / zs + 2. * sin(vW.x * .23 / zs)));
+        c += uSpill * (exp(-d / (.5 * zs)) + 4. * sheen * (.8 + .2 * sin(uTime * 1.3 + vW.x * .5)));
+        vec2 g = vec2(vW.x * 1.2, d * 5.), f = fract(g) - .5; float h = hash(floor(g));
+        float glint = step(.9, h) * smoothstep(.5, .1, abs(f.x)) * smoothstep(.16, 0., abs(f.y)) * (.35 + .65 * pow(max(0., sin(uTime * (.8 + 2. * h) + h * 40.)), 4.));
+        c += uSpark * .22 * glint * smoothstep(1.4, .05, d) * near;
         vec2 q = vW.xy - uRider.xy;
         c += uSpill * 2.5 * uRider.z * exp(-dot(q, q) * .25);
         gl_FragColor = vec4(c, 1.);
       }`,
   })), 0);
 
-  const rimU = { uTime: U.uTime, uPxK: U.uPxK, uRider, uGoal: { value: GOAL },
+  const rimU = { uTime: U.uTime, uPxK: U.uPxK, uGoal: { value: GOAL },
     uRim: { value: neon(TN.cyan, 1.35) }, uIn: { value: neon(TN.blue, 1.15) }, uStud: { value: neon(TN.blue6, 2.2) },
     uPop: { value: neon(TN.magenta2, 2.2) }, uHot: { value: neon(TN.blue6, 1.6) } };
   add(new THREE.Mesh(rimGeo, new THREE.ShaderMaterial({
@@ -95,7 +99,7 @@ export function createView(canvas, T, hooks = {}) {
         vS = nrm.z; vW = position.xy;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position.xy + nrm.xy * nrm.z * 3.3 * w, 0., 1.);
       }`,
-    fragmentShader: `uniform float uTime, uGoal; uniform vec3 uRim, uIn, uStud, uPop, uHot, uRider; varying float vS; varying vec2 vW;
+    fragmentShader: `uniform float uTime, uGoal; uniform vec3 uRim, uIn, uStud, uPop, uHot; varying float vS; varying vec2 vW;
       ${TUBE}
       void main() {
         float d = abs(vS), aa = fwidth(d) * .75, x = vW.x;
@@ -107,7 +111,6 @@ export function createView(canvas, T, hooks = {}) {
           if (x > -2.2) c = uPop * (.85 + .3 * sin(uTime * 9.));
         }
         if (abs(x - uGoal) < 1.2) c = uHot * (step(.5, fract(x * 2.)) + .4);
-        c += uHot * uRider.z * .8 * exp(-(x - uRider.x) * (x - uRider.x) * .15);
         gl_FragColor = vec4(tube(c, d, aa, .3), 0.);
       }`,
   })), 13);
@@ -526,7 +529,7 @@ export function createView(canvas, T, hooks = {}) {
   };
 
   // ================================================================ air trail, speed lines, flash
-  const TN_ = 64, trail = new Ribbon(TN_, ribbonMaterial(neon(TN.cyan, 2.2), neon(TN.magenta2, 1.6), 0.28), 0.02);
+  const TN_ = 64, trail = new Ribbon(TN_, ribbonMaterial(neon(TN.cyan, 0.9), neon(TN.magenta2, 0.7), 0.28), 0.02);
   add(trail.mesh, 15);
   const trailRing = new Float32Array(TN_ * 3); // x, y, t
   let trailHead = 0, trailN = 0, trailLive = false;
@@ -589,7 +592,14 @@ export function createView(canvas, T, hooks = {}) {
 
   // ================================================================ rider
   const rider = createRider();
-  scene.add(rider.group, rider.streamers); // (a Group's renderOrder would re-sort all its children: keep them at 0)
+  riderScene.add(rider.group, rider.streamers); // (a Group's renderOrder would re-sort all its children: keep them at 0)
+  scene.add(rider.flame);
+  const specsArt = new Art(), GOLDC = C(TN.yellow), ring0 = x => arc(x, 0, 0.05, 0.05, 0, Math.PI * 1.9, 18);
+  for (const x of [-0.065, 0.065]) specsArt.fill(ring0(x), C('#f6ead2'), 0.55).ink(ring0(x), GOLDC, 0.009, true);
+  specsArt.ink([-0.02, 0.012, 0.02, 0.012], GOLDC, 0.007).ink([-0.114, 0.012, -0.16, 0.035], GOLDC, 0.007).ink([0.114, 0.012, 0.16, 0.035], GOLDC, 0.007);
+  const specs = add(new THREE.Mesh(specsArt.geometry(), vecMaterial({ depthTest: false })), 16);
+  specs.matrixAutoUpdate = false; specs.visible = false;
+  const SPX = { t: -1, x: 0, y: 0, vx: 0, vy: 0, a: 0, w: 0, k: 1 };
 
   // ================================================================ the rider's dragon form: a sky dragon (backdrop.js) whose
   // head is the rider and whose body follows the path the head has flown or slid. Fed every frame, shown once earned.
@@ -618,13 +628,13 @@ export function createView(canvas, T, hooks = {}) {
   // ================================================================ API
   // per-frame scalars: object fields are updated in place by V8, closure `let` doubles get re-boxed on every write
   const F = { t: 0.5, lastA: 0.5, spray: 0.5, spark: 0.5, light: 0.5, flash: 0.5, kick: 0.5, mile: 0.5, mileX: 0.5, trailLast: 0.5, drops: 0.5, wake: 0.5,
-    signT: 0.5, signNear: 0.5, signFlash: 0.5 };
+    signT: 0.5, signNear: 0.5, signFlash: 0.5, vx: 0.5 };
   for (const k in F) F[k] = 0;
   const QCOL = { perfect: neon(TN.green1, 2.2), good: neon(TN.blue, 2), sketchy: neon(TN.orange, 2), crash: neon(TN.red, 2.2) };
   const WATER = C(TN.blue5, 0.85), MIST = C(TN.blue, 0.5), CLOUD = C(TN.magenta, 0.45), WARM = neon(TN.yellow, 2.2), PINK = neon(TN.magenta2, 1.6), CYAN = neon(TN.cyan, 2.2), WHITE = neon(TN.fg, 2.2);
-  const scale = h => Math.max(1, (0.035 * h) / 1.6); // rider ≥ ~3.5 % of the view height
+  const scale = h => Math.max(1, h / 28); // the ~1.1 m rider never drops below ~4 % of the view height
   const SPARK_RATE = [0, 110, 45, 35, 80], FLASH_POP = neon(TN.fg, 0.045), FLASH_CRASH = neon(TN.red, 0.1), RED = neon(TN.red, 1.8);
-  const FLASH_BOLT = neon('#b8c6ff', 0.05), FLASH_WAKE = neon(TN.magenta2, 0.16);
+  const FLASH_BOLT = neon('#b8c6ff', 0.05), FLASH_WAKE = neon(TN.yellow, 0.16), GOLD2 = neon(TN.yellow, 2), KOI_RED = neon(TN.red1, 1.8);
   let rain = 0;
 
   // look = { p, dragon, won, legacy, petals, rain, storm }: how far the rider has turned, and the weather that follows
@@ -711,15 +721,22 @@ export function createView(canvas, T, hooks = {}) {
         F.kick = Math.max(F.kick, 0.4); flashCol.copy(FLASH_CRASH); F.flash = 0.7;
         break;
       }
+      case 'look': // a purchase: a sparkle on him, so the change gets noticed
+        burst(18, GLITTER, x, y + 0.9 * s, 0, 1, 3, 0.1 * s, 0.8, WARM, 0.8);
+        ring(x, y + 0.8 * s, 1.4 * s, 0.035 * s, 0.45, WARM);
+        rider.kick(0.18);
+        break;
       case 'milestone':
         burst(16, GLITTER, x, y + 0.5, 0, 0, 9, 0.13 * s, 0.9, MILE, 0.7);
         ring(x, y + 0.5, 4 * s, 0.05 * s, 0.5, MILE);
         F.mileX = d.dist ?? x; F.mile = 1; uFlare.value.set(F.mileX, U.uTime.value); F.kick = Math.max(F.kick, 0.35);
         break;
-      case 'awaken': { // the reveal: lightning finds the rider, the kid is gone in a burst, and a dragon unfurls from them
+      case 'awaken': { // the reveal: lightning finds him, his glasses fly off, and a dragon unfurls along the path his tie traced
         const bx = rider.world.hx, by = rider.world.hy, top = camera.position.y + (camera.position.z + 60) * Math.tan(THREE.MathUtils.degToRad(20));
-        burst(60, SPARK, bx, by, 0, 0, 16, 0.16 * s, 0.9, PINK); burst(40, GLITTER, bx, by, 0, 0, 10, 0.2 * s, 1.4, neon(TN.magenta, 2));
-        for (const [R, dur, col] of [[6, 0.5, WHITE], [10, 0.8, PINK], [15, 1.2, neon(TN.magenta, 1.6)]]) ring(bx, by, R * s, 0.08 * s, dur, col);
+        burst(60, SPARK, bx, by, 0, 0, 16, 0.16 * s, 0.9, GOLD2); burst(40, GLITTER, bx, by, 0, 0, 10, 0.2 * s, 1.4, KOI_RED);
+        for (const [R, dur, col] of [[6, 0.5, WHITE], [10, 0.8, GOLD2], [15, 1.2, KOI_RED]]) ring(bx, by, R * s, 0.08 * s, dur, col);
+        Object.assign(SPX, { t: 0, x: bx - 0.5 * s, y: by + 0.2 * s, vx: F.vx * 0.5, vy: 6, a: 0, w: 9, k: 1.6 * s });
+        rider.shed(1);
         flashCol.copy(FLASH_WAKE); F.flash = 1; F.kick = Math.max(F.kick, 0.8);
         if (d.look) backdrop.setLook(d.look);
         backdrop.strike(bx - 4 * s, top, by, -60, 2); backdrop.escort();
@@ -759,11 +776,20 @@ export function createView(canvas, T, hooks = {}) {
       const m = (F.t - F.wake) / 1.3;
       if (m >= 0.2 && !rider.dragon) { rider.setLook({ dragon: true }); pdMesh.visible = true; }
       rider.fade(m < 0.2 ? 1 - m / 0.2 : Math.min(1, (m - 0.2) / 0.3));
+      rider.shed(m < 0.2 ? 1 : Math.max(0, 1 - (m - 0.2) / 0.6)); // the tie lingers while the dragon grows along its path
       PD.grow = 0.06 + 0.94 * (1 - (1 - Math.min(1, Math.max(0, m - 0.2) / 0.8)) ** 3);
       pdMesh.material.uniforms.uAlpha.value = Math.min(1, Math.max(0, m - 0.2) / 0.25);
-      if (m >= 1.2) { F.wake = 0; rider.fade(1); PD.grow = 1; }
+      if (m >= 1.2) { F.wake = 0; rider.fade(1); rider.shed(0); PD.grow = 1; }
     }
     rider.update(dt, r, s, F.t);
+    F.vx = r.vx;
+    if (SPX.t >= 0) { // his glasses, tumbling away at the reveal
+      SPX.t += dt; SPX.vx *= Math.exp(-1.5 * dt); SPX.vy -= 9.8 * dt; SPX.x += SPX.vx * dt; SPX.y += SPX.vy * dt; SPX.a += SPX.w * dt;
+      const c = Math.cos(SPX.a) * SPX.k, sn = Math.sin(SPX.a) * SPX.k;
+      specs.matrix.set(c, -sn, 0, SPX.x, sn, c, 0, SPX.y, 0, 0, 1, 0.2, 0, 0, 0, 1); specs.matrixWorldNeedsUpdate = true;
+      specs.visible = SPX.t < 2.5;
+      if (!specs.visible) SPX.t = -1;
+    }
     feedDragon(dt, r, s, cam);
     F.light += ((r.ground && !r.crashed ? 0.35 + Math.min(0.65, r.speed / 25) : 0) - F.light) * (1 - Math.exp(-dt * 8));
     uRider.value.set(r.x, r.y + 0.3, F.light);

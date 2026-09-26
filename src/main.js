@@ -38,6 +38,7 @@ initUI({
     if (buy(save, id)) {
       audio.play('buy'); storeSave(save);
       st = loadoutStats(save.levels); view.setLoadout(save.levels, look()); resetRider();
+      view.fx('look', { x: r.x, y: r.y });
     } else audio.play('deny');
     showScreen('shop', shopData());
   },
@@ -229,7 +230,7 @@ let camT = 0;
 function updateCamera(dt, v) {
   const speed = Math.hypot(v.vx, v.vy);
   const alt = Math.max(0, v.y - T.h(v.x));
-  let h, lead, ty;
+  let h, lead, ty, m;
   if (mode === 'run' || mode === 'results') {
     // zoom with speed, and far enough out that the ground below stays in frame (up to the 160 m cap);
     // narrow (portrait) screens zoom out further, or the lip and the landing ahead only show up ~0.4 s before you reach them
@@ -242,6 +243,9 @@ function updateCamera(dt, v) {
     if (cineT > 0) { h = 17; lead = 0; ty = v.y + 1.5; } // the reveal: close in, rider a little low (clear of the toasts)
   } else if (mode === 'title') {
     h = 70; lead = 0; ty = 10;
+  } else if ((m = mirror())) { // the shop: frame him in its mirror, so every purchase shows on him
+    h = Math.max(1.6 / (0.6 * m.h), 2.3 / (0.8 * m.w * aspect())); // ~1.6 m tall and ~2.3 m wide with his ride and tie
+    lead = -(m.cx - 0.5) * h * aspect(); ty = v.y + 0.75 - (0.5 - m.cy) * h;
   } else {
     h = 20; lead = Math.min(11, 0.3 * h * aspect()); ty = v.y + 0.125 * h - 2; // parked at the gate, looking down the in-run
   }
@@ -262,6 +266,12 @@ function updateCamera(dt, v) {
   cam.roll = 0.0436 * sh * noise(camT, 3); // ≤ 2.5°
 }
 const aspect = () => innerWidth / Math.max(1, innerHeight);
+const mirrorEl = document.querySelector('.shop .mirror');
+function mirror() { // the shop's clear window, in screen fractions (null when hidden or too small to show him)
+  const b = mirrorEl?.getBoundingClientRect();
+  return b && b.width > 60 && b.height > 60
+    ? { cx: (b.left + b.width / 2) / innerWidth, cy: (b.top + b.height / 2) / innerHeight, w: b.width / innerWidth, h: b.height / innerHeight } : null;
+}
 
 // ------------------------------------------------------------------ main loop
 

@@ -117,16 +117,19 @@ export function progress(levels) {
   return (n / RUNGS + y / SPEND) / 2;
 }
 
-// Outfit changes, each passing for Tokyo street fashion until it doesn't. Stage = how many thresholds p has passed.
+// The salaryman's drift into a koi: outfit changes that each pass for something an office worker might wear on a
+// big night out, until they don't. Stage = how many thresholds p has passed. The first lands on the second purchase,
+// then one every two or three; the tie (rider.js) also grows on every purchase.
 export const DRIFT = [
-  [0.22, 'cat-ear beanie'],    // horn buds
-  [0.34, 'wired earbuds'],     // whiskers
-  [0.46, 'holo jacket'],       // scales
-  [0.58, 'dino hoodie'],       // dorsal spikes
-  [0.7, 'LED goggles'],        // a dragon's eye
-  [0.8, 'three-finger gloves'], // claws
+  [0.04, 'novelty tie'],      // kohaku markings
+  [0.1, 'dojō-hige'],         // barbels (the mustache is named after a loach's)
+  [0.17, 'hachimaki'],        // tanchō: the red crown spot
+  [0.25, 'sukajan'],          // a white body with red patches
+  [0.36, 'pompadour'],        // dorsal fin; sequins and a scaled tie
+  [0.5, 'fish-eye glasses'],  // a koi's eye and mouth
+  [0.64, 'fin cuffs'],        // pectoral fins
+  [0.78, 'the tail'],         // the tie splits into a butterfly-koi tail and starts to pulse: it was never a tie
 ];
-export const FINS = 0.9; // the scarf grows fins and starts to pulse: it was never a scarf
 export const stage = p => DRIFT.filter(([at]) => p >= at).length;
 
 // Dragons bring the rain: cherry-blossom petals give way to rain, then a thunderstorm follows the rider.

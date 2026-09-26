@@ -55,7 +55,7 @@ kbd {
   -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3);
 }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .panel, .shop { background: rgb(26 27 38 / .96); }
+  .panel, .cards { background: rgb(26 27 38 / .96); }
 }
 
 /* Neon words: light core + layered glow in --c */
@@ -116,10 +116,18 @@ kbd {
 }
 
 /* ---------- Shop ---------- */
-.shop {
+.shop { /* no blur over the whole screen: the mirror is a clear window onto the rider at the gate */
   display: flex; flex-direction: column; gap: 12px;
-  background: linear-gradient(rgb(22 22 30 / .6), rgb(22 22 30 / .86));
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  background: linear-gradient(rgb(22 22 30 / .8), rgb(22 22 30 / .3) 24%, rgb(22 22 30 / .3) 76%, rgb(22 22 30 / .86));
+}
+.room { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(180px, 20%) 1fr; gap: 14px; }
+.mirror {
+  align-self: center; aspect-ratio: 4 / 5; max-height: 100%; border-radius: 18px; border: 1px solid var(--line);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .03), inset 0 0 60px rgb(0 0 0 / .4), 0 0 24px rgb(0 0 0 / .25);
+}
+@media (orientation: portrait) {
+  .room { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 30%) 1fr; }
+  .mirror { align-self: stretch; aspect-ratio: auto; }
 }
 .shop > * { width: 100%; max-width: 1200px; margin-inline: auto; }
 .bar { display: flex; align-items: center; gap: clamp(14px, 2.4vw, 34px); }
@@ -158,8 +166,9 @@ kbd {
 
 .cards {
   flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 330px), 1fr)); gap: 14px;
-  align-content: start; align-content: safe center;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 290px), 1fr)); gap: 14px;
+  align-content: start; align-content: safe center; border-radius: 18px;
+  background: rgb(22 22 30 / .45); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   padding: 6px 6px 22px; margin-block: -6px; scrollbar-width: thin; scrollbar-color: var(--tblack) transparent;
   -webkit-mask-image: linear-gradient(#000 calc(100% - 22px), transparent); mask-image: linear-gradient(#000 calc(100% - 22px), transparent);
 }

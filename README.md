@@ -53,19 +53,26 @@ node test/sim.mjs progress   # simulated playthrough with a bot pilot
 ## The Dragon Gate (spoilers)
 
 The items are also a story: 登竜門, the legend of the carp that leaps the Dragon Gate waterfall and becomes a
-dragon (the reason Japan flies koinobori for its kids). The rider never learns it is happening.
+dragon. 鯉の滝登り, a carp climbing the waterfall, is also the Japanese idiom for getting ahead in life, so the rider
+is a tired office worker taking the leap. He never learns what is happening to him.
 
 - `progress()` in `src/items.js` is the mean of rungs owned and yen spent, 0 → 1. Every purchase moves it; most of
   it lands late, when the prices climb.
-- `DRIFT` lists outfit stages that each pass for Tokyo street fashion: cat-ear beanie (horns), wired earbuds
-  (whiskers), holo jacket (scales), dino hoodie (dorsal spikes), LED goggles (a dragon's eye), three-finger gloves
-  (claws). The scarf lengthens all along and, at the very end, grows fins and starts to pulse.
+- `DRIFT` lists outfit stages that each pass for what a salaryman might wear on a big night out, and each is a koi
+  trait: a novelty tie (kohaku markings), a dojō-hige mustache (barbels; the Japanese name comes from the loach's),
+  a hachimaki with a red sun disc (the tanchō's crown spot), a sukajan (a white body with red patches), an orange
+  pompadour (the dorsal fin, with sequins for scales), round gold glasses (a koi's eye) and frilled happi cuffs
+  (pectoral fins). Last comes the tail: the red tie he has worn all along splits into a butterfly-koi tail and
+  starts to pulse. The first stage lands on the second purchase and the tie grows on every one; in the air he moves
+  more like a fish the further he has drifted. The shop frames him in a mirror at the start gate, so each change
+  shows.
 - `weather()`: cherry-blossom petals give way to rain, then a thunderstorm; dragons bring the rain.
-- The magenta sky dragon wears the rider's colours. It turns up more, comes closer and lingers as progress grows.
-- The first flight past Tokyo Tower is the reveal: lightning, the kid is gone, and a magenta dragon (built by the
-  same code as the sky dragons, following the path the head has flown) unfurls in their place while the other
-  dragons come to escort it. The magenta one is never seen in the sky again. Every run after is flown as a dragon.
-- Resetting progress after that leaves your dragon up in the sky for the next kid.
+- One sky dragon wears the koi's colours (white, red patches, gold). It turns up more, comes closer and lingers as
+  progress grows.
+- The first flight past Tokyo Tower is the reveal: lightning, his glasses fly off, and a kohaku dragon (built by the
+  same code as the sky dragons, following the path his tie traced) unfurls in his place while the other dragons
+  come to escort it. The koi-coloured one is never seen in the sky again. Every run after is flown as a dragon.
+- Resetting progress after that leaves your dragon up in the sky for the next salaryman.
 
 ## Credits
 
