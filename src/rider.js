@@ -307,7 +307,7 @@ export class Ribbon {
 
 const BONE = { ROOT: 0, LEGS: 1, TORSO: 2, HEAD: 3, ARM: 4, GLIDER: 5, BOOST: 6 }, NB = 7;
 const SEAT = [0.13, 0.31, 0.17, 0.27, 0.38, 0.36];                // hip height per ride tier
-const LEGA = [0, 0, 0, 0, -0.3, 0];                               // resting leg angle (Bullet Nose: feet down its flank)
+const LEGA = [0, 0, 0, 0, -0.3, 0];                               // resting leg angle (Shinkansen Nose: feet down its flank)
 const MOUNT = [[-0.72, 0.2], [-0.72, 0.26], [-0.68, 0.14], [-0.68, 0.24], [-0.84, 0.27], [-0.7, 0.3]]; // booster mount
 const BOOST_K = [1, 1.3, 1.3, 1.3, 1];     // booster art scale per tier (the pearl floats at its own size)
 const PEARL = [[1.25, 1.55], [1.9, 0.75]]; // where the Flaming Pearl floats: ahead of his face / ahead of the dragon's snout

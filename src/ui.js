@@ -344,7 +344,7 @@ function renderShop() {
     const c = cards[t.id] ??= makeCard(t);
     const lv = save.levels[t.id] ?? 0, cur = t.tiers[lv], next = t.tiers[lv + 1];
     const poor = !!next && save.yen < next.price;
-    put(c.icon, cur.kanji ?? t.kanji); // a tier can rename its track's kanji (No Wings: 翼 becomes 龍)
+    put(c.icon, cur.kanji ?? t.kanji); // a tier can rename its track's kanji (Just You: 翼 becomes 龍)
     put(c.cur, cur.name);
     put(c.perk, cur.perk);
     [...c.pips.children].forEach((p, i) => p.classList.toggle('on', i < lv));
